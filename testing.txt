@@ -1,0 +1,47 @@
+1. Register
+
+{
+    "nama" : "usertes",
+    "username" : "usernametes",
+    "password" : "12345",
+    "role" : "superadmin"
+}
+
+2. Login
+
+{
+    "username" : "usernametes",
+    "password" : "12345"
+}
+
+3. produk
+
+{
+  "nama": "Beras IR64 Premium",
+  "harga": 15000,
+  "kategori_id": 22
+}
+
+4. Laporan Keuangan Keluar (kredit)
+
+{
+  "jenis": "pengeluaran",
+  "kategori_id": 5,
+  "deskripsi": "Beli plastik kemasan",
+  "debit": 0,
+  "kredit": 80000
+}
+
+5. Laporan Keuangan Masuk (Debit)
+
+{
+  "jenis": "pemasukan",
+  "kategori_id": 7,
+  "deskripsi": "Penjualan beras 10kg",
+  "debit": 120000,
+  "kredit": 0,
+  "items": [
+    { "produk_id": 3, "jumlah": 10 }
+  ]
+}
+
