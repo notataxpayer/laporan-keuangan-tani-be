@@ -41,7 +41,7 @@ export async function createLaporan(req, res) {
     const k = Number(kredit || 0);
     if (d < 0 || k < 0) return res.status(400).json({ message: 'debit/kredit tidak boleh negatif' });
 
-    // ✅ aturan khusus:
+    // ✅ aturan khusus
     if (vJenis === 'pemasukan' && !(d > 0 && k === 0)) {
       return res.status(400).json({ message: 'untuk pemasukan: isi debit > 0 dan kredit = 0' });
     }
@@ -57,7 +57,7 @@ export async function createLaporan(req, res) {
       return res.status(400).json({ message: `kategori_id harus berjenis "${vJenis}"` });
     }
 
-    // Validasi & normalisasi items (opsional)
+    // Validasi & normalisasi items
     let normalizedItems = [];
     if (Array.isArray(items) && items.length) {
       for (const it of items) {
@@ -85,7 +85,7 @@ export async function createLaporan(req, res) {
         });
       }
 
-      // Total items harus sama dengan nilai debit/kredit sesuai jenis
+      // Total items harus sama dengan nilai debit/kredit
       const totalItems = normalizedItems.reduce((a, b) => a + b.subtotal, 0);
       if (vJenis === 'pemasukan' && totalItems !== d) {
         return res.status(400).json({
@@ -112,7 +112,7 @@ export async function createLaporan(req, res) {
     });
     if (hErr) return res.status(500).json({ message: 'Gagal membuat laporan', detail: hErr.message });
 
-    // Insert detail jika ada
+    // Insert detail
     if (normalizedItems.length) {
       const det = await insertDetailBarang(id_laporan, normalizedItems);
       if (det.error) {
