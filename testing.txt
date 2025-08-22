@@ -1,17 +1,22 @@
 1. Register
 
 {
-    "nama" : "usertes",
-    "username" : "usernametes",
-    "password" : "12345",
-    "role" : "superadmin"
+    "nama" : "akunadmin",
+    "email" : "admin@gmail.com",
+    "nomor_telepon" : "085155280972",
+    "password" : "Admin12345",
+    "role" : "admin"
 }
 
 2. Login
 
 {
-    "username" : "usernametes",
+    "email" : "dymikavindra@gmail.com",
     "password" : "12345"
+}
+{
+    "email" : "admin@gmail.com",
+    "password" : "Admin12345"
 }
 
 3. produk

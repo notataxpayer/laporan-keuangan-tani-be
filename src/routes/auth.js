@@ -8,75 +8,118 @@ const router = express.Router();
 
 /**
  * REGISTER
- * body: { nama?, username, password, role?, klaster_id? }
+ * body: { nama?, email, password, role?, klaster_id? }
  * role default: 'user'
  */
 router.post('/register', async (req, res) => {
-  const { nama, username, password, role = 'user', klaster_id = null } = req.body || {};
+  const { nama, email, nomor_telepon, password, role = 'user', klaster_id = null } = req.body || {};
 
-  if (!username || !password) {
-    return res.status(400).json({ message: 'username & password wajib diisi' });
+  if (!email || !password) {
+    return res.status(400).json({ message: 'email & password wajib diisi' });
   }
 
-  // Cek duplikasi username
-  const { data: existing, error: errCheck } = await supabase
-    .from('User')
-    .select('user_id')
-    .eq('username', username)
-    .maybeSingle();
+  // Cek email
+const { data: existingemail, error: errCheckemail } = await supabase
+  .from('User')
+  .select('user_id')
+  .eq('email', email)
+  .maybeSingle();
 
-  if (errCheck) {
-    return res.status(500).json({ message: 'Gagal cek username', detail: errCheck.message });
-  }
-  if (existing) {
-    return res.status(409).json({ message: 'Username sudah digunakan' });
-  }
+if (errCheckemail) {
+  return res.status(500).json({ message: 'Gagal cek email', detail: errCheckemail.message });
+}
+if (existingemail) {
+  return res.status(409).json({ message: 'email sudah digunakan' });
+}
+
+// Cek email
+const { data: existingEmail, error: errCheckEmail } = await supabase
+  .from('User')
+  .select('user_id')
+  .eq('email', email)
+  .maybeSingle();
+
+if (errCheckEmail) {
+  return res.status(500).json({ message: 'Gagal cek email', detail: errCheckEmail.message });
+}
+if (existingEmail) {
+  return res.status(409).json({ message: 'Email sudah digunakan' });
+}
+
+// Cek nomor telepon
+const { data: existingPhone, error: errCheckPhone } = await supabase
+  .from('User')
+  .select('user_id')
+  .eq('nomor_telepon', nomor_telepon)
+  .maybeSingle();
+
+if (errCheckPhone) {
+  return res.status(500).json({ message: 'Gagal cek nomor telepon', detail: errCheckPhone.message });
+}
+if (existingPhone) {
+  return res.status(409).json({ message: 'Nomor telepon sudah digunakan' });
+}
+
 
   const hashed = await hashPassword(password);
   const user_id = randomUUID();
 
   const { data, error } = await supabase
     .from('User')
-    .insert([{ user_id, nama, username, password: hashed, role, klaster_id }])
-    .select('user_id, nama, username, role, klaster_id, created_at')
+    .insert([{ user_id, nama, email, nomor_telepon, password: hashed, role, klaster_id }])
+    .select('user_id, nama, email, nomor_telepon, role, klaster_id, created_at')
     .single();
 
   if (error) {
     return res.status(500).json({ message: 'Gagal membuat user', detail: error.message });
   }
 
-  const token = signToken({ user_id, username, role });
+  const token = signToken({ user_id, email, role });
   return res.status(201).json({ token, user: data });
 });
 
 /**
  * LOGIN
- * body: { username, password }
+ * body: { email, password }
  */
 router.post('/login', async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) {
-    return res.status(400).json({ message: 'username & password wajib diisi' });
+  const { identifier, password } = req.body || {};
+  if (!identifier || !password) {
+    return res.status(400).json({ message: 'Email/No. Telepon & password wajib diisi' });
   }
 
+  // Deteksi input apakah email atau nomor telepon
+  const isEmail = identifier.includes('@');
+
+  // Query ke Supabase
   const { data: user, error } = await supabase
     .from('User')
-    .select('user_id, nama, username, password, role, klaster_id, created_at')
-    .eq('username', username)
+    .select('user_id, nama, email, password, nomor_telepon, role, klaster_id, created_at')
+    .eq(isEmail ? 'email' : 'nomor_telepon', identifier)
     .single();
 
   if (error || !user) {
-    return res.status(401).json({ message: 'Username atau password salah' });
+    return res.status(401).json({ message: 'Email/Nomor Telepon atau password salah' });
   }
 
   const ok = await comparePassword(password, user.password);
-  if (!ok) return res.status(401).json({ message: 'Username atau password salah' });
+  if (!ok) {
+    return res.status(401).json({ message: 'Email/Nomor Telepon atau password salah' });
+  }
 
-  const token = signToken({ user_id: user.user_id, username: user.username, role: user.role });
+  // Generate token
+  const token = signToken({
+    user_id: user.user_id,
+    nomor_telepon: user.nomor_telepon,
+    email: user.email,
+    role: user.role
+  });
+
   delete user.password;
 
   return res.json({ token, user });
 });
+
 
 /**
  * ME (cek profil dari token)
@@ -85,7 +128,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', authRequired, async (req, res) => {
   const { data: user, error } = await supabase
     .from('User')
-    .select('user_id, nama, username, role, klaster_id, created_at')
+    .select('user_id, nama, email, role, klaster_id, created_at')
     .eq('user_id', req.user.user_id)
     .single();
 
