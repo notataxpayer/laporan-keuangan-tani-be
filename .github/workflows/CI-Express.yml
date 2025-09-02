@@ -12,6 +12,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    environment: Production
     strategy:
       matrix:
         node: [20, 22]
