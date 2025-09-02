@@ -50,3 +50,12 @@
   ]
 }
 
+6. Arus Kas 
+
+{
+  contoh params
+  1. GET {{base_url}}/keuangan/arus-kas?arah=masuk&start=2025-08-01&end=2025-09-01&page=1&limit=20
+  2. GET {{base_url}}/keuangan/arus-kas?arah=keluar&kategori_id=5&start=2025-08-01&end=2025-09-01
+  3. GET {{base_url}}/keuangan/arus-kas?arah=masuk&id_user={{user_id_target}}&start=2025-08-01&end=2025-09-01
+
+}

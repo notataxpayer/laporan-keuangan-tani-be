@@ -10,6 +10,7 @@ import {
   listLaporan,
   deleteLaporan,
   sumProfitLoss,
+  listAruskas,
 } from '../models/finance_model.js';
 
 function isAdmin(role) {
@@ -237,4 +238,43 @@ export async function getLabaRugi(req, res) {
     laba_rugi: labaRugi,
     per_kategori: perKategori,
   });
+
 }
+
+export async function getArusKas(req, res) {
+    const arah = String(req.query.arah || '').toLowerCase();
+    if (!['masuk', 'keluar'].includes(arah)) {
+      return res.status(400).json({ message: 'param arah harus "masuk" atau "keluar"' });
+    }
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
+    const kategori_id = req.query.kategori_id ? Number(req.query.kategori_id) : undefined;
+
+    // rentang tanggal
+    const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
+    const end = req.query.end ? new Date(req.query.end).toISOString() : undefined;
+    // akses data: 
+    const isAdmin = (req.user.role === 'admin' || req.user.role === 'superadmin');
+    const id_user = isAdmin ? (req.query.id_user ?? undefined) : req.user.user_id;
+
+    const { data, error, count } = await listAruskas({
+      id_user, start, end, arah, kategori_id, page, limit,
+    });
+
+    if (error) return res.status(500).json({ message: 'Gagal mengambil arus kas', detail: error.message });
+
+    // total nilai untuk arah yang diminta
+    const total_nilai = (data ?? []).reduce((acc, row) => {
+      if (arah === 'masuk') return acc + Number(row.debit || 0);
+      return acc + Number(row.kredit || 0);
+    }, 0);
+
+    return res.json({
+      meta:{
+        arah, page, limit,
+        total_rowsL: count ?? (data?.length ?? 0),
+        total_nilai
+      },
+      data
+    })
+  }

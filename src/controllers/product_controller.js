@@ -1,4 +1,5 @@
 // src/controllers/product.controller.js
+import supabase from '../config/supabase.js';
 import {
   createProduct,
   listProducts,
@@ -104,3 +105,4 @@ export async function remove(req, res) {
 
   return res.json({ message: 'Produk dihapus' });
 }
+

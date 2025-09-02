@@ -138,4 +138,194 @@ router.get('/me', authRequired, async (req, res) => {
   return res.json({ user });
 });
 
+// Swagger docs
+/**
+ * @openapi
+ * /auth/register:
+ *   post:
+ *     summary: Register user baru
+ *     description: Membuat user baru. Email wajib unik. Nomor telepon opsional namun bila diisi harus unik.
+ *     tags:
+ *       - Auth
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               nama:
+ *                 type: string
+ *                 example: Budi
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: budi@example.com
+ *               nomor_telepon:
+ *                 type: string
+ *                 nullable: true
+ *                 example: "081234567890"
+ *               password:
+ *                 type: string
+ *                 example: rahasia123
+ *               role:
+ *                 type: string
+ *                 enum: [user, admin, superadmin]
+ *                 default: user
+ *               klaster_id:
+ *                 type: integer
+ *                 nullable: true
+ *     responses:
+ *       201:
+ *         description: User dibuat
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     user_id:
+ *                       type: string
+ *                       format: uuid
+ *                     nama:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                       format: email
+ *                     nomor_telepon:
+ *                       type: string
+ *                       nullable: true
+ *                     role:
+ *                       type: string
+ *                       enum: [user, admin, superadmin]
+ *                     klaster_id:
+ *                       type: integer
+ *                       nullable: true
+ *                     created_at:
+ *                       type: string
+ *                       format: date-time
+ *       400:
+ *         description: email & password wajib diisi
+ *       409:
+ *         description: Email/nomor telepon sudah digunakan
+ *       500:
+ *         description: Gagal membuat user
+ */
+
+/**
+ * @openapi
+ * /auth/login:
+ *   post:
+ *     summary: Login (email atau nomor telepon)
+ *     description: Kirim **identifier** berisi email **atau** nomor telepon, beserta password.
+ *     tags:
+ *       - Auth
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - identifier
+ *               - password
+ *             properties:
+ *               identifier:
+ *                 type: string
+ *                 example: budi@example.com
+ *                 description: Email atau nomor telepon (mis. "081234567890")
+ *               password:
+ *                 type: string
+ *                 example: rahasia123
+ *     responses:
+ *       200:
+ *         description: Login sukses
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     user_id:
+ *                       type: string
+ *                       format: uuid
+ *                     nama:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                       format: email
+ *                     nomor_telepon:
+ *                       type: string
+ *                       nullable: true
+ *                     role:
+ *                       type: string
+ *                       enum: [user, admin, superadmin]
+ *                     klaster_id:
+ *                       type: integer
+ *                       nullable: true
+ *                     created_at:
+ *                       type: string
+ *                       format: date-time
+ *       400:
+ *         description: Email/No. Telepon & password wajib diisi
+ *       401:
+ *         description: Kredensial salah
+ */
+
+/**
+ * @openapi
+ * /auth/me:
+ *   get:
+ *     summary: Profil pengguna dari token
+ *     security:
+ *       - BearerAuth: []
+ *     tags:
+ *       - Auth
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     user_id:
+ *                       type: string
+ *                       format: uuid
+ *                     nama:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                       format: email
+ *                     role:
+ *                       type: string
+ *                       enum: [user, admin, superadmin]
+ *                     klaster_id:
+ *                       type: integer
+ *                       nullable: true
+ *                     created_at:
+ *                       type: string
+ *                       format: date-time
+ *       401:
+ *         description: Unauthorized (token hilang/invalid)
+ *       404:
+ *         description: User tidak ditemukan
+ */
+
+
+
 export default router;

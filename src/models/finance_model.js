@@ -112,3 +112,28 @@ export async function sumProfitLoss({ id_user, start, end }) {
 
   return q;
 }
+
+export async function listAruskas({
+  id_user, start, end, arah, kategori_id, page = 1, limit = 10,
+}){
+  const from = (page - 1) * limit;
+  const to = from + limit -1;
+
+  let q = supabase
+    .from('lapkeuangan')
+    .select('id_laporan, id_user, created_at, jenis, kategori_id, deskripsi, debit, kredit', { count: 'exact' })
+    .order('created_at', { ascending: false });
+
+  if (id_user) q = q.eq('id_user', id_user);
+  if (kategori_id) q = q.eq('kategori_id', Number(kategori_id));
+  if (start) q = q.gte('created_at', start);
+  if (end) q = q.lt('created_at', end);
+
+  if (arah === 'masuk') {
+    q = q.eq('jenis', 'pemasukan').gt('debit', 0);
+  } else if (arah === 'keluar') {
+    q = q.eq('jenis', 'pengeluaran').gt('kredit', 0);
+  }
+
+  return q.range(from, to);
+}
