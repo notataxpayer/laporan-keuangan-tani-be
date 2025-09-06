@@ -4,6 +4,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
+    branches: [ main, develop ]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,21 +15,31 @@ jobs:
     runs-on: ubuntu-latest
     environment: Production
     strategy:
-      matrix: { node: [20, 22] }
+      matrix:
+        node: [20, 22]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: ${{ matrix.node }}, cache: npm }
-      - run: npm ci
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run Jest (coverage)
         env:
-          CI: "true"
+          CI: 'true'
           NODE_ENV: test
           NODE_OPTIONS: --experimental-vm-modules
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: npm run test:ci
+
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -39,12 +50,12 @@ jobs:
   deploy-railway:
     name: Deploy to Railway
     needs: test
-    # deploy otomatis hanya dari push ke main (bukan PR)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: Production
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Install Railway CLI
         run: npm i -g @railway/cli
@@ -59,19 +70,29 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          # --detach supaya tidak nunggu logs; --no-confirm agar non-interaktif
           railway up --service ${{ secrets.RAILWAY_SERVICE_ID }} --detach --no-confirm
+
   preview-railway:
+    name: Preview to Railway (PR)
     needs: test
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     environment: Production
     steps:
-      - uses: actions/checkout@v4
-      - run: npm i -g @railway/cli
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+
       - name: Link to project (same service)
-        env: { RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }} }
-        run: railway link --project ${{ secrets.RAILWAY_PROJECT_ID }} --service ${{ secrets.RAILWAY_SERVICE_ID }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway link --project ${{ secrets.RAILWAY_PROJECT_ID }} --service ${{ secrets.RAILWAY_SERVICE_ID }}
+
       - name: Deploy (Preview)
-        env: { RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }} }
-        run: railway up --service ${{ secrets.RAILWAY_SERVICE_ID }} --detach --no-confirm
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --service ${{ secrets.RAILWAY_SERVICE_ID }} --detach --no-confirm
