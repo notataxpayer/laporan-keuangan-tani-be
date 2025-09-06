@@ -58,25 +58,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Railway CLI
-        run: npm i -g @railway/cli@2
+        run: npm i -g @railway/cli
 
-      - name: Railway Auth (non-interactive)
+      - name: Link & Deploy
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway login --token "$RAILWAY_TOKEN"
-
-      - name: Link project/service
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          CI: 'true'
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}   # <-- Project Token
         run: |
-          railway --token "$RAILWAY_TOKEN" link \
+          railway link \
             --project "${{ secrets.RAILWAY_PROJECT_ID }}" \
             --service "${{ secrets.RAILWAY_SERVICE_ID }}"
-
-      - name: Deploy
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway --token "$RAILWAY_TOKEN" up \
+          railway up \
             --service "${{ secrets.RAILWAY_SERVICE_ID }}" \
             --detach --ci --yes --no-confirm
