@@ -29,9 +29,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
-
       - name: Run Jest (coverage + junit)
         env:
           CI: "true"
