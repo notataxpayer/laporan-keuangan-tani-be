@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main]
+    branches: [ main, develop ]
   pull_request:
 
 concurrency:
@@ -14,22 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: Production
     strategy:
-      matrix:
-        node: [20, 22]
+      matrix: { node: [20, 22] }
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node ${{ matrix.node }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run Jest (coverage + junit)
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: ${{ matrix.node }}, cache: npm }
+      - run: npm ci
+      - name: Run Jest (coverage)
         env:
           CI: "true"
           NODE_ENV: test
@@ -38,8 +29,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: npm run test:ci
-
-      # Upload artefak
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
@@ -47,16 +36,42 @@ jobs:
           name: coverage-node${{ matrix.node }}
           path: coverage
 
-      - name: Upload JUnit report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: junit-node${{ matrix.node }}
-          path: reports/junit.xml
+  deploy-railway:
+    name: Deploy to Railway
+    needs: test
+    # deploy otomatis hanya dari push ke main (bukan PR)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: Production
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Upload Swagger spec
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: swagger-spec
-          path: artifacts/swagger.json
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+
+      - name: Link project/service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway link --project ${{ secrets.RAILWAY_PROJECT_ID }} --service ${{ secrets.RAILWAY_SERVICE_ID }}
+
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          # --detach supaya tidak nunggu logs; --no-confirm agar non-interaktif
+          railway up --service ${{ secrets.RAILWAY_SERVICE_ID }} --detach --no-confirm
+  preview-railway:
+    needs: test
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    environment: Production
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm i -g @railway/cli
+      - name: Link to project (same service)
+        env: { RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }} }
+        run: railway link --project ${{ secrets.RAILWAY_PROJECT_ID }} --service ${{ secrets.RAILWAY_SERVICE_ID }}
+      - name: Deploy (Preview)
+        env: { RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }} }
+        run: railway up --service ${{ secrets.RAILWAY_SERVICE_ID }} --detach --no-confirm
