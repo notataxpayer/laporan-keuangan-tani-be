@@ -39,10 +39,6 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: npm run test:ci
 
-      # Export swagger.json (butuh script export:swagger)
-      - name: Export Swagger spec
-        run: npm run export:swagger
-
       # Upload artefak
       - name: Upload coverage
         if: always()
