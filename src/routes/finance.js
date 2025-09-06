@@ -290,6 +290,145 @@ router.get('/neraca', authRequired, getNeraca);
  *         description: Parameter arah tidak valid / tidak diisi
  */
 
+/**
+ * @openapi
+ * /keuangan/neraca:
+ *   get:
+ *     summary: Neraca (kelompok berdasarkan neraca_identifier)
+ *     description: |
+ *       Mengelompokkan saldo berdasarkan rentang **neraca_identifier**:
+ *       - **aset_lancar**: 0–2599  
+ *       - **aset_tetap** : 2600–3599  
+ *       - **kewajiban**  : 4000–5000  
+ *       - **lainnya**    : di luar rentang di atas
+ *
+ *       Nilai **debit** dianggap pemasukan (menambah aset), **kredit** dianggap pengeluaran.
+ *       Response juga memuat daftar **produk** yang jatuh pada masing-masing kelompok (berdasarkan kategori produknya).
+ *     security:
+ *       - BearerAuth: []
+ *     tags:
+ *       - Keuangan
+ *     parameters:
+ *       - in: query
+ *         name: start
+ *         schema:
+ *           type: string
+ *           example: "2025-08-01"
+ *         description: Filter created_at >= start (ISO / tanggal).
+ *       - in: query
+ *         name: end
+ *         schema:
+ *           type: string
+ *           example: "2025-09-01"
+ *         description: Filter created_at < end (exclusive).
+ *       - in: query
+ *         name: id_user
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Hanya untuk admin/superadmin; hitung neraca milik user tertentu.
+ *       - in: query
+ *         name: created_by
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: (Opsional) Filter **produk_by_kelompok** hanya produk yang dibuat oleh user tertentu.
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 periode:
+ *                   type: object
+ *                   properties:
+ *                     start:
+ *                       type: string
+ *                       nullable: true
+ *                     end:
+ *                       type: string
+ *                       nullable: true
+ *                 kelompok:
+ *                   type: object
+ *                   properties:
+ *                     aset_lancar:
+ *                       $ref: '#/components/schemas/NeracaKelompok'
+ *                     aset_tetap:
+ *                       $ref: '#/components/schemas/NeracaKelompok'
+ *                     kewajiban:
+ *                       $ref: '#/components/schemas/NeracaKelompok'
+ *                     lainnya:
+ *                       $ref: '#/components/schemas/NeracaKelompok'
+ *                 ringkasan:
+ *                   $ref: '#/components/schemas/NeracaRingkasan'
+ *                 produk_by_kelompok:
+ *                   type: object
+ *                   properties:
+ *                     aset_lancar:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/ProdukNeracaItem'
+ *                     aset_tetap:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/ProdukNeracaItem'
+ *                     kewajiban:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/ProdukNeracaItem'
+ *                     lainnya:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/ProdukNeracaItem'
+ *       401:
+ *         description: Unauthorized
+ */
 
+/**
+ * @openapi
+ * components:
+ *   schemas:
+ *     NeracaKelompok:
+ *       type: object
+ *       properties:
+ *         debit:
+ *           type: integer
+ *           example: 15000000
+ *         kredit:
+ *           type: integer
+ *           example: 13000000
+ *     NeracaRingkasan:
+ *       type: object
+ *       properties:
+ *         total_debit:
+ *           type: integer
+ *           example: 17000000
+ *         total_kredit:
+ *           type: integer
+ *           example: 16500000
+ *         seimbang:
+ *           type: boolean
+ *           example: false
+ *     ProdukNeracaItem:
+ *       type: object
+ *       properties:
+ *         produk_id:
+ *           type: integer
+ *           example: 3
+ *         nama:
+ *           type: string
+ *           example: "Beras IR64"
+ *         harga:
+ *           type: integer
+ *           example: 12000
+ *         kategori_id:
+ *           type: integer
+ *           example: 7
+ *         created_by:
+ *           type: string
+ *           format: uuid
+ */
 
 export default router;
