@@ -25,7 +25,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-          cache: 'npm'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -48,35 +48,35 @@ jobs:
           path: coverage
 
   deploy-railway:
-  name: Deploy to Railway
-  needs: test
-  if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-  runs-on: ubuntu-latest
-  environment: Production
-  steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    name: Deploy to Railway
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: Production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Install Railway CLI
-      run: npm i -g @railway/cli@2
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli@2
 
-    - name: Railway Auth (non-interactive)
-      env:
-        RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      run: railway login --token "$RAILWAY_TOKEN"
+      - name: Railway Auth (non-interactive)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway login --token "$RAILWAY_TOKEN"
 
-    - name: Link project/service
-      env:
-        RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      run: |
-        railway --token "$RAILWAY_TOKEN" link \
-          --project "${{ secrets.RAILWAY_PROJECT_ID }}" \
-          --service "${{ secrets.RAILWAY_SERVICE_ID }}"
+      - name: Link project/service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway --token "$RAILWAY_TOKEN" link \
+            --project "${{ secrets.RAILWAY_PROJECT_ID }}" \
+            --service "${{ secrets.RAILWAY_SERVICE_ID }}"
 
-    - name: Deploy
-      env:
-        RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      run: |
-        railway --token "$RAILWAY_TOKEN" up \
-          --service "${{ secrets.RAILWAY_SERVICE_ID }}" \
-          --detach --ci --yes --no-confirm
+      - name: Deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway --token "$RAILWAY_TOKEN" up \
+            --service "${{ secrets.RAILWAY_SERVICE_ID }}" \
+            --detach --ci --yes --no-confirm
