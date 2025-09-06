@@ -11,6 +11,8 @@ import {
   deleteLaporan,
   sumProfitLoss,
   listAruskas,
+  listForNeraca,
+  listProdukByKategoriRanges
 } from '../models/finance_model.js';
 
 function isAdmin(role) {
@@ -21,14 +23,24 @@ function normalizeJenis(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-/**
- * POST /api/keuangan/laporan
- * Aturan: debit = pemasukan, kredit = pengeluaran
- * - jenis 'pemasukan'  => debit > 0, kredit = 0
- * - jenis 'pengeluaran'=> kredit > 0, debit = 0
- * - kategori_id harus exist & sesuai jenis
- * - jika items ada, total subtotal items harus = nilai debit/kredit sesuai jenis
- */
+const GROUP_RANGES = {
+  aset_lancar: [{min: 0, max: 2599}],
+  aset_tetap:  [{min: 2600, max: 3599}],
+  kewajiban:  [{min: 4000, max: 4999}],
+}
+
+function inRange(num, {min, max}) {
+  return num >= min && num <= max;
+}
+
+function kelompokKategori(kategori_id) {
+  const id = Number(kategori_id) || 0;
+  if (GROUP_RANGES.aset_lancar.some(r => inRange(id, r))) return 'aset_lancar';
+  if (GROUP_RANGES.aset_tetap.some(r => inRange(id, r)))  return 'aset_tetap';
+  if (GROUP_RANGES.kewajiban.some(r => inRange(id, r)))   return 'kewajiban';
+  return 'lainnya';
+}
+
 export async function createLaporan(req, res) {
   try {
     const { jenis, kategori_id, deskripsi, debit, kredit, items } = req.body || {};
@@ -278,3 +290,83 @@ export async function getArusKas(req, res) {
       data
     })
   }
+
+  // GET NERACA
+
+ export async function getNeraca(req, res) {
+  try {
+    const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
+    const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
+
+    const userIsAdmin = (req.user.role === 'admin' || req.user.role === 'superadmin');
+    const id_user = userIsAdmin ? (req.query.id_user ?? undefined) : req.user.user_id;
+
+    // 1) Ambil baris lapkeuangan untuk hitung debit/kredit per kelompok
+    const { data: rows, error } = await listForNeraca({ id_user, start, end });
+    if (error) return res.status(500).json({ message: 'Gagal mengambil data neraca', detail: error.message });
+
+    const agg = {
+      aset_lancar: { debit: 0, kredit: 0 },
+      aset_tetap:  { debit: 0, kredit: 0 },
+      kewajiban:   { debit: 0, kredit: 0 },
+      lainnya:     { debit: 0, kredit: 0 },
+    };
+
+    for (const r of rows ?? []) {
+      const grp = kelompokKategori(r.kategori_id);
+      agg[grp].debit  += Number(r.debit || 0);
+      agg[grp].kredit += Number(r.kredit || 0);
+    }
+
+    const total_debit  = Object.values(agg).reduce((a, v) => a + v.debit, 0);
+    const total_kredit = Object.values(agg).reduce((a, v) => a + v.kredit, 0);
+
+    // 2) Ambil produk per kelompok kategori (opsional filter created_by lewat query)
+    //    Misal admin ingin hanya produk yang dibuat oleh dirinya: ?created_by=<uuid>
+    const created_by = req.query.created_by ? String(req.query.created_by) : undefined;
+
+    // Gabungkan semua rentang yang didefinisikan (tanpa "lainnya")
+    const allRanges = [
+      ...GROUP_RANGES.aset_lancar,
+      ...GROUP_RANGES.aset_tetap,
+      ...GROUP_RANGES.kewajiban,
+    ];
+
+    const { data: produkList, error: prodErr } =
+      await listProdukByKategoriRanges(allRanges, { created_by });
+    if (prodErr) {
+      return res.status(500).json({ message: 'Gagal mengambil produk', detail: prodErr.message });
+    }
+
+    const produk_by_kelompok = {
+      aset_lancar: [],
+      aset_tetap: [],
+      kewajiban: [],
+      lainnya: []   // produk dengan kategori_id di luar rentang masuk sini (kemungkinan kecil)
+    };
+
+    for (const p of produkList ?? []) {
+      const grp = kelompokKategori(p.kategori_id);
+      produk_by_kelompok[grp].push({
+        produk_id: p.produk_id,
+        nama: p.nama,
+        harga: p.harga,
+        kategori_id: p.kategori_id,
+        created_by: p.created_by
+      });
+    }
+
+    return res.json({
+      periode: { start: start ?? null, end: end ?? null },
+      kelompok: agg,
+      ringkasan: {
+        total_debit,
+        total_kredit,
+        seimbang: total_debit === total_kredit
+      },
+      produk_by_kelompok
+    });
+  } catch (e) {
+    return res.status(500).json({ message: 'Internal error', detail: e.message });
+  }
+}

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main]
   pull_request:
 
 concurrency:
@@ -29,8 +29,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Jest (coverage)
+      - name: Lint
+        run: npm run lint
+
+      - name: Run Jest (coverage + junit)
         env:
+          CI: "true"
           NODE_ENV: test
           NODE_OPTIONS: --experimental-vm-modules
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -38,9 +42,28 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: npm run test:ci
 
+      # Export swagger.json (butuh script export:swagger)
+      - name: Export Swagger spec
+        run: npm run export:swagger
+
+      # Upload artefak
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-node${{ matrix.node }}
           path: coverage
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-node${{ matrix.node }}
+          path: reports/junit.xml
+
+      - name: Upload Swagger spec
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swagger-spec
+          path: artifacts/swagger.json

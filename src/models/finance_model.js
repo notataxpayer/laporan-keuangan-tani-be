@@ -137,3 +137,34 @@ export async function listAruskas({
 
   return q.range(from, to);
 }
+
+
+export async function listForNeraca({ id_user, start, end }) {
+  let q = supabase
+    .from('lapkeuangan')
+    .select('id_laporan, id_user, created_at, kategori_id, debit, kredit');
+
+  if (id_user) q = q.eq('id_user', id_user);
+  if (start) q = q.gte('created_at', start);
+  if (end)   q = q.lt('created_at', end);
+
+  return q;
+}
+
+
+export async function listProdukByKategoriRanges(ranges, { created_by } = {}) {
+  if (!Array.isArray(ranges) || ranges.length === 0) {
+    return { data: [], error: null };
+  }
+  const orParts = ranges.map(r => `and(kategori_id.gte.${r.min},kategori_id.lte.${r.max})`).join(',');
+
+  let q = supabase
+    .from('produk')
+    .select('produk_id, nama, harga, kategori_id, created_by');
+
+  q = q.or(orParts);
+
+  if (created_by) q = q.eq('created_by', created_by);
+
+  return q;
+}

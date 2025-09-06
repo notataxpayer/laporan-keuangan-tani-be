@@ -6,11 +6,6 @@ import { signToken, authRequired } from '../middlewares/auth.js';
 
 const router = express.Router();
 
-/**
- * REGISTER
- * body: { nama?, email, password, role?, klaster_id? }
- * role default: 'user'
- */
 router.post('/register', async (req, res) => {
   const { nama, email, nomor_telepon, password, role = 'user', klaster_id = null } = req.body || {};
 

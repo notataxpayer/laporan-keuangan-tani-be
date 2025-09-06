@@ -1,5 +1,7 @@
 // src/tests/finance.controller.test.js
 import { jest } from '@jest/globals';
+import { listForNeraca, listProdukByKategoriRanges } from '../models/finance_model.js';
+import { list } from '../controllers/kategori_controller.js';
 
 // ---- MOCK SEMUA FUNGSI MODEL SEBELUM IMPORT CONTROLLER ----
 const modelMocks = {
@@ -12,7 +14,9 @@ const modelMocks = {
   listLaporan: jest.fn(),
   deleteLaporan: jest.fn(),
   sumProfitLoss: jest.fn(),
-  listAruskas: jest.fn(), // kalau nanti mau dipakai
+  listAruskas: jest.fn(), 
+  listForNeraca: jest.fn(),
+  listProdukByKategoriRanges: jest.fn(),
 };
 
 jest.unstable_mockModule('../models/finance_model.js', () => ({
@@ -26,6 +30,8 @@ jest.unstable_mockModule('../models/finance_model.js', () => ({
   deleteLaporan: modelMocks.deleteLaporan,
   sumProfitLoss: modelMocks.sumProfitLoss,
   listAruskas: modelMocks.listAruskas,
+  listForNeraca: modelMocks.listForNeraca,
+  listProdukByKategoriRanges: modelMocks.listProdukByKategoriRanges,
 }));
 
 // Import controller SETELAH mock siap
