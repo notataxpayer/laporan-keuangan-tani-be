@@ -8,7 +8,8 @@ import {
   deleteLaporanController,
   getLabaRugi,
   getArusKas,
-  getNeraca
+  getNeraca,
+  getArusKasByAkun
 } from '../controllers/finance_controller.js';
 
 const router = express.Router();
@@ -20,21 +21,47 @@ router.delete('/laporan/:id', authRequired, deleteLaporanController);
 router.get('/laba-rugi', authRequired, getLabaRugi);
 router.get('/arus-kas', authRequired, getArusKas);
 router.get('/neraca', authRequired, getNeraca);
+router.get('/arus-kas/akun', authRequired, getArusKasByAkun);
 
-// swagger docs
+export default router;
+
+/**
+ * @openapi
+ * components:
+ *   schemas:
+ *     DetailLaporanItem:
+ *       type: object
+ *       properties:
+ *         produk_id:    { type: integer, example: 3 }
+ *         jumlah:       { type: integer, example: 10 }
+ *         harga_satuan: { type: integer, example: 12000, nullable: true }
+ *         subtotal:     { type: integer, example: 120000, nullable: true }
+ *     LaporanKeuangan:
+ *       type: object
+ *       properties:
+ *         id_laporan:  { type: string, format: uuid }
+ *         id_user:     { type: string, format: uuid }
+ *         akun_id:     { type: integer, nullable: true }
+ *         created_at:  { type: string }
+ *         jenis:       { type: string, enum: [pemasukan, pengeluaran] }
+ *         kategori_id: { type: integer }
+ *         deskripsi:   { type: string, nullable: true }
+ *         debit:       { type: integer }
+ *         kredit:      { type: integer }
+ */
+
 /**
  * @openapi
  * /keuangan/laporan:
  *   get:
  *     summary: List laporan keuangan
- *     description: User biasa hanya melihat laporannya sendiri. Admin/Superadmin dapat memfilter dengan id_user.
  *     security: [ { BearerAuth: [] } ]
  *     tags: [Keuangan]
  *     parameters:
  *       - in: query
  *         name: id_user
  *         schema: { type: string, format: uuid }
- *         description: Hanya untuk admin/superadmin; filter laporan milik user tertentu.
+ *         description: Hanya admin/superadmin; filter milik user tertentu.
  *       - in: query
  *         name: jenis
  *         schema: { type: string, enum: [pemasukan, pengeluaran] }
@@ -42,13 +69,15 @@ router.get('/neraca', authRequired, getNeraca);
  *         name: kategori_id
  *         schema: { type: integer }
  *       - in: query
+ *         name: akun_id
+ *         schema: { type: integer }
+ *         description: Filter berdasarkan akun kas.
+ *       - in: query
  *         name: start
  *         schema: { type: string, example: '2025-08-01' }
- *         description: Filter created_at >= start (ISO/tanggal).
  *       - in: query
  *         name: end
  *         schema: { type: string, example: '2025-09-01' }
- *         description: Filter created_at < end (exclusive).
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1, minimum: 1 }
@@ -58,21 +87,12 @@ router.get('/neraca', authRequired, getNeraca);
  *     responses:
  *       200:
  *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 page:  { type: integer, example: 1 }
- *                 limit: { type: integer, example: 10 }
- *                 total: { type: integer, example: 3 }
- *                 data:
- *                   type: array
- *                   items: { $ref: '#/components/schemas/LaporanKeuangan' }
- *       401: { description: Unauthorized }
  *   post:
  *     summary: Buat laporan keuangan (debit=pemasukan, kredit=pengeluaran)
- *     description: Jika mengirim items, total subtotal harus sama dengan nilai debit/kredit sesuai jenis.
+ *     description: |
+ *       - Jenis pemasukan → isi `debit` > 0, `kredit` = 0.  
+ *       - Jenis pengeluaran → isi `kredit` > 0, `debit` = 0.  
+ *       - Items boleh kirim `harga_satuan` atau langsung `subtotal`. Total items harus sama dengan nilai debit/kredit.
  *     security: [ { BearerAuth: [] } ]
  *     tags: [Keuangan]
  *     requestBody:
@@ -83,34 +103,24 @@ router.get('/neraca', authRequired, getNeraca);
  *             type: object
  *             required: [jenis, kategori_id]
  *             properties:
- *               jenis: { type: string, enum: [pemasukan, pengeluaran] }
- *               kategori_id: { type: integer, example: 7 }
- *               deskripsi: { type: string, example: "Penjualan beras 10kg" }
- *               debit:  { type: integer, example: 120000, description: "Isi untuk pemasukan; kredit=0" }
- *               kredit: { type: integer, example: 0, description: "Isi untuk pengeluaran; debit=0" }
+ *               akun_id:    { type: integer, nullable: true, example: 2 }
+ *               jenis:      { type: string, enum: [pemasukan, pengeluaran] }
+ *               kategori_id:{ type: integer, example: 7 }
+ *               deskripsi:  { type: string, example: "Penjualan beras 10kg" }
+ *               debit:      { type: integer, example: 200000 }
+ *               kredit:     { type: integer, example: 0 }
  *               items:
  *                 type: array
- *                 items:
- *                   $ref: '#/components/schemas/DetailLaporanItem'
+ *                 items: { $ref: '#/components/schemas/DetailLaporanItem' }
  *     responses:
- *       201:
- *         description: Laporan dibuat
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message: { type: string, example: "Laporan dibuat" }
- *                 data:    { $ref: '#/components/schemas/LaporanKeuangan' }
- *       400: { description: Validasi gagal }
- *       401: { description: Unauthorized }
+ *       201: { description: Laporan dibuat }
  */
 
 /**
  * @openapi
  * /keuangan/laporan/{id}:
  *   get:
- *     summary: Detail laporan (dengan item barang jika ada)
+ *     summary: Detail laporan + items
  *     security: [ { BearerAuth: [] } ]
  *     tags: [Keuangan]
  *     parameters:
@@ -118,42 +128,10 @@ router.get('/neraca', authRequired, getNeraca);
  *         name: id
  *         required: true
  *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 header:  { $ref: '#/components/schemas/LaporanKeuangan' }
- *                 details:
- *                   type: array
- *                   items: { $ref: '#/components/schemas/DetailLaporanItem' }
- *       401: { description: Unauthorized }
- *       403: { description: Forbidden (bukan pemilik & bukan admin) }
- *       404: { description: Tidak ditemukan }
  *   delete:
- *     summary: Hapus laporan
+ *     summary: Hapus laporan (reversal saldo akun otomatis)
  *     security: [ { BearerAuth: [] } ]
  *     tags: [Keuangan]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Laporan dihapus
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message: { type: string, example: "Laporan dihapus" }
- *       401: { description: Unauthorized }
- *       403: { description: Forbidden (bukan pemilik & bukan admin) }
- *       404: { description: Tidak ditemukan }
  */
 
 /**
@@ -173,76 +151,44 @@ router.get('/neraca', authRequired, getNeraca);
  *       - in: query
  *         name: id_user
  *         schema: { type: string, format: uuid }
- *         description: Hanya untuk admin/superadmin; hitung milik user tertentu.
- *     responses:
- *       200:
- *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 periode:
- *                   type: object
- *                   properties:
- *                     start: { type: string, nullable: true }
- *                     end:   { type: string, nullable: true }
- *                 total_pemasukan:  { type: integer, example: 350000 }
- *                 total_pengeluaran:{ type: integer, example: 220000 }
- *                 laba_rugi:        { type: integer, example: 130000 }
- *                 per_kategori:
- *                   type: object
- *                   additionalProperties:
- *                     type: object
- *                     properties:
- *                       pemasukan:  { type: integer, example: 120000 }
- *                       pengeluaran:{ type: integer, example: 80000 }
- *       401: { description: Unauthorized }
  */
 
 /**
  * @openapi
- * /keuangan/arus-kas:
+ * /keuangan/arus-kas/akun:
  *   get:
- *     summary: Arus kas (masuk/keluar)
+ *     summary: Arus kas per akun (gabungan masuk & keluar)
  *     description: |
- *       Mengembalikan daftar baris lapkeuangan sesuai arah.
- *       Aturan: masuk = pemasukan (debit), keluar = pengeluaran (kredit).
- *       Tanggal opsional; gunakan pagination bila tanpa tanggal.
+ *       Mengembalikan dua set data dalam satu response:
+ *       - **masuk** (pemasukan/debit)
+ *       - **keluar** (pengeluaran/kredit)
+ *       Hanya untuk akun kas yang dimiliki user atau klasternya (atau admin/superadmin).
  *     security:
  *       - BearerAuth: []
  *     tags:
  *       - Keuangan
  *     parameters:
  *       - in: query
- *         name: arah
+ *         name: akun_id
  *         required: true
  *         schema:
- *           type: string
- *           enum: [masuk, keluar]
- *         description: "masuk = pemasukan (debit), keluar = pengeluaran (kredit)"
+ *           type: integer
  *       - in: query
  *         name: id_user
  *         schema:
  *           type: string
  *           format: uuid
- *         description: Hanya admin/superadmin; filter milik user tertentu.
- *       - in: query
- *         name: kategori_id
- *         schema:
- *           type: integer
+ *         description: Khusus admin/superadmin; batasi ke user tertentu.
  *       - in: query
  *         name: start
  *         schema:
  *           type: string
  *           example: "2025-08-01"
- *         description: Filter created_at >= start.
  *       - in: query
  *         name: end
  *         schema:
  *           type: string
  *           example: "2025-09-01"
- *         description: Filter created_at < end (exclusive).
  *       - in: query
  *         name: page
  *         schema:
@@ -267,168 +213,36 @@ router.get('/neraca', authRequired, getNeraca);
  *                 meta:
  *                   type: object
  *                   properties:
- *                     arah:
- *                       type: string
- *                       example: masuk
- *                     page:
- *                       type: integer
- *                       example: 1
- *                     limit:
- *                       type: integer
- *                       example: 10
- *                     total_rows:
- *                       type: integer
- *                       example: 3
- *                     total_nilai:
- *                       type: integer
- *                       example: 350000
- *                 data:
+ *                     akun_id:        { type: integer, example: 2 }
+ *                     periode:
+ *                       type: object
+ *                       properties:
+ *                         start:       { type: string, nullable: true }
+ *                         end:         { type: string, nullable: true }
+ *                     page:           { type: integer, example: 1 }
+ *                     limit:          { type: integer, example: 10 }
+ *                     total_rows_masuk:  { type: integer, example: 3 }
+ *                     total_rows_keluar: { type: integer, example: 2 }
+ *                     total_masuk:    { type: integer, example: 350000 }
+ *                     total_keluar:   { type: integer, example: 220000 }
+ *                     net:            { type: integer, example: 130000 }
+ *                 masuk:
  *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/LaporanKeuangan'
- *       400:
- *         description: Parameter arah tidak valid / tidak diisi
- */
+ *                   items: { $ref: '#/components/schemas/LaporanKeuangan' }
+ *                 keluar:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/LaporanKeuangan' }
+ *       400: { description: akun_id tidak valid }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden (bukan pemilik/klaster/admin) }
+ *       404: { description: Akun kas tidak ditemukan }
+ *
 
 /**
  * @openapi
  * /keuangan/neraca:
  *   get:
- *     summary: Neraca (kelompok berdasarkan neraca_identifier)
- *     description: |
- *       Mengelompokkan saldo berdasarkan rentang **neraca_identifier**:
- *       - **aset_lancar**: 0–2599  
- *       - **aset_tetap** : 2600–3599  
- *       - **kewajiban**  : 4000–5000  
- *       - **lainnya**    : di luar rentang di atas
- *
- *       Nilai **debit** dianggap pemasukan (menambah aset), **kredit** dianggap pengeluaran.
- *       Response juga memuat daftar **produk** yang jatuh pada masing-masing kelompok (berdasarkan kategori produknya).
- *     security:
- *       - BearerAuth: []
- *     tags:
- *       - Keuangan
- *     parameters:
- *       - in: query
- *         name: start
- *         schema:
- *           type: string
- *           example: "2025-08-01"
- *         description: Filter created_at >= start (ISO / tanggal).
- *       - in: query
- *         name: end
- *         schema:
- *           type: string
- *           example: "2025-09-01"
- *         description: Filter created_at < end (exclusive).
- *       - in: query
- *         name: id_user
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Hanya untuk admin/superadmin; hitung neraca milik user tertentu.
- *       - in: query
- *         name: created_by
- *         schema:
- *           type: string
- *           format: uuid
- *         description: (Opsional) Filter **produk_by_kelompok** hanya produk yang dibuat oleh user tertentu.
- *     responses:
- *       200:
- *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 periode:
- *                   type: object
- *                   properties:
- *                     start:
- *                       type: string
- *                       nullable: true
- *                     end:
- *                       type: string
- *                       nullable: true
- *                 kelompok:
- *                   type: object
- *                   properties:
- *                     aset_lancar:
- *                       $ref: '#/components/schemas/NeracaKelompok'
- *                     aset_tetap:
- *                       $ref: '#/components/schemas/NeracaKelompok'
- *                     kewajiban:
- *                       $ref: '#/components/schemas/NeracaKelompok'
- *                     lainnya:
- *                       $ref: '#/components/schemas/NeracaKelompok'
- *                 ringkasan:
- *                   $ref: '#/components/schemas/NeracaRingkasan'
- *                 produk_by_kelompok:
- *                   type: object
- *                   properties:
- *                     aset_lancar:
- *                       type: array
- *                       items:
- *                         $ref: '#/components/schemas/ProdukNeracaItem'
- *                     aset_tetap:
- *                       type: array
- *                       items:
- *                         $ref: '#/components/schemas/ProdukNeracaItem'
- *                     kewajiban:
- *                       type: array
- *                       items:
- *                         $ref: '#/components/schemas/ProdukNeracaItem'
- *                     lainnya:
- *                       type: array
- *                       items:
- *                         $ref: '#/components/schemas/ProdukNeracaItem'
- *       401:
- *         description: Unauthorized
+ *     summary: Neraca sederhana (range kategori → aset/kewajiban)
+ *     security: [ { BearerAuth: [] } ]
+ *     tags: [Keuangan]
  */
-
-/**
- * @openapi
- * components:
- *   schemas:
- *     NeracaKelompok:
- *       type: object
- *       properties:
- *         debit:
- *           type: integer
- *           example: 15000000
- *         kredit:
- *           type: integer
- *           example: 13000000
- *     NeracaRingkasan:
- *       type: object
- *       properties:
- *         total_debit:
- *           type: integer
- *           example: 17000000
- *         total_kredit:
- *           type: integer
- *           example: 16500000
- *         seimbang:
- *           type: boolean
- *           example: false
- *     ProdukNeracaItem:
- *       type: object
- *       properties:
- *         produk_id:
- *           type: integer
- *           example: 3
- *         nama:
- *           type: string
- *           example: "Beras IR64"
- *         harga:
- *           type: integer
- *           example: 12000
- *         kategori_id:
- *           type: integer
- *           example: 7
- *         created_by:
- *           type: string
- *           format: uuid
- */
-
-export default router;

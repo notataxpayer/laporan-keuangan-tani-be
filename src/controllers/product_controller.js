@@ -1,5 +1,4 @@
 // src/controllers/product.controller.js
-import supabase from '../config/supabase.js';
 import {
   createProduct,
   listProducts,
@@ -13,13 +12,11 @@ function validatePayload(body, { partial = false } = {}) {
 
   if (!partial) {
     if (!body?.nama || String(body.nama).trim() === '') errors.push('nama wajib diisi');
-    if (body?.harga === undefined || body?.harga === null || Number.isNaN(Number(body.harga))) {
-      errors.push('harga wajib berupa angka');
-    }
   }
 
-  if (partial && body?.harga !== undefined && Number.isNaN(Number(body.harga))) {
-    errors.push('harga harus berupa angka');
+  // harga dihapus dari skema — bila ada, tolak biar jelas
+  if (body?.harga !== undefined) {
+    errors.push('field "harga" tidak didukung lagi; harga diinput saat membuat laporan');
   }
 
   if (body?.kategori_id !== undefined && body.kategori_id !== null && Number.isNaN(Number(body.kategori_id))) {
@@ -33,12 +30,11 @@ export async function create(req, res) {
   const errors = validatePayload(req.body);
   if (errors.length) return res.status(400).json({ message: 'Validasi gagal', errors });
 
-  const { nama, harga, kategori_id = null } = req.body;
+  const { nama, kategori_id = null } = req.body;
   const created_by = req.user.user_id;
 
   const { data, error } = await createProduct({
     nama: String(nama),
-    harga: Number(harga),
     kategori_id: kategori_id ? Number(kategori_id) : null,
     created_by,
   });
@@ -77,7 +73,6 @@ export async function update(req, res) {
 
   const payload = {};
   if (req.body.nama !== undefined) payload.nama = String(req.body.nama);
-  if (req.body.harga !== undefined) payload.harga = Number(req.body.harga);
   if (req.body.kategori_id !== undefined) {
     payload.kategori_id = req.body.kategori_id === null ? null : Number(req.body.kategori_id);
   }
@@ -105,4 +100,3 @@ export async function remove(req, res) {
 
   return res.json({ message: 'Produk dihapus' });
 }
-

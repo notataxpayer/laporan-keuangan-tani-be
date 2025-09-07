@@ -1,20 +1,12 @@
-// src/models/finance.model.js
+// src/models/finance_model.js
 import supabase from '../config/supabase.js';
 
-// --- KATEGORI & PRODUK ---
-
-export async function getKategoriById(kategori_id) {
-  return supabase
-    .from('kategorial') // NOTE: nama tabel jadi lowercase di Postgres
-    .select('kategori_id, nama, jenis')
-    .eq('kategori_id', Number(kategori_id))
-    .single();
-}
+// --- PRODUK ---
 
 export async function getProdukById(produk_id) {
   return supabase
     .from('produk')
-    .select('produk_id, harga, nama, kategori_id')
+    .select('produk_id, nama, kategori_id') // harga sudah dihapus dari skema produk
     .eq('produk_id', Number(produk_id))
     .single();
 }
@@ -22,20 +14,20 @@ export async function getProdukById(produk_id) {
 // --- LAPORAN ---
 
 export async function insertLaporan({
-  id_laporan, id_user, jenis, kategori_id, deskripsi, debit, kredit,
+  id_laporan, id_user, akun_id, jenis, deskripsi, debit, kredit,
 }) {
   return supabase
     .from('lapkeuangan')
     .insert([{
       id_laporan,
       id_user,
-      jenis, // 'pengeluaran' | 'pemasukan'
-      kategori_id,
+      akun_id: akun_id ?? null,
+      jenis,                // 'pengeluaran' | 'pemasukan'
       deskripsi: deskripsi ?? null,
       debit: Number(debit || 0),
       kredit: Number(kredit || 0),
     }])
-    .select('id_laporan, id_user, created_at, jenis, kategori_id, deskripsi, debit, kredit')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit')
     .single();
 }
 
@@ -54,7 +46,7 @@ export async function insertDetailBarang(laporan_id, items) {
 export async function getLaporanHeader(id_laporan) {
   return supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, created_at, jenis, kategori_id, deskripsi, debit, kredit')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit')
     .eq('id_laporan', id_laporan)
     .single();
 }
@@ -62,24 +54,24 @@ export async function getLaporanHeader(id_laporan) {
 export async function getLaporanDetails(id_laporan) {
   return supabase
     .from('detaillaporanbarang')
-    .select('id_detail, produk_id, jumlah, subtotal, produk:produk_id(nama, harga)')
+    .select('id_detail, produk_id, jumlah, subtotal, produk:produk_id(nama, kategori_id)')
     .eq('laporan_id', id_laporan);
 }
 
 export async function listLaporan({
-  id_user, start, end, jenis, kategori_id, page = 1, limit = 10,
+  id_user, start, end, jenis, akun_id, page = 1, limit = 10,
 }) {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
   let q = supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, created_at, jenis, kategori_id, deskripsi, debit, kredit', { count: 'exact' })
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit', { count: 'exact' })
     .order('created_at', { ascending: false });
 
   if (id_user) q = q.eq('id_user', id_user);
   if (jenis) q = q.eq('jenis', jenis);
-  if (kategori_id) q = q.eq('kategori_id', Number(kategori_id));
+  if (akun_id) q = q.eq('akun_id', Number(akun_id));
   if (start) q = q.gte('created_at', start);
   if (end) q = q.lt('created_at', end);
 
@@ -100,11 +92,11 @@ export async function deleteLaporan(id_laporan) {
     .eq('id_laporan', id_laporan);
 }
 
-// Untuk perhitungan laba-rugi
+// Laba-rugi (agregasi header)
 export async function sumProfitLoss({ id_user, start, end }) {
   let q = supabase
     .from('lapkeuangan')
-    .select('debit, kredit, jenis, kategori_id, created_at');
+    .select('debit, kredit, jenis, created_at');
 
   if (id_user) q = q.eq('id_user', id_user);
   if (start) q = q.gte('created_at', start);
@@ -113,19 +105,20 @@ export async function sumProfitLoss({ id_user, start, end }) {
   return q;
 }
 
+// Arus kas (list) + filter akun
 export async function listAruskas({
-  id_user, start, end, arah, kategori_id, page = 1, limit = 10,
+  id_user, start, end, arah, akun_id, page = 1, limit = 10,
 }){
   const from = (page - 1) * limit;
   const to = from + limit -1;
 
   let q = supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, created_at, jenis, kategori_id, deskripsi, debit, kredit', { count: 'exact' })
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit', { count: 'exact' })
     .order('created_at', { ascending: false });
 
   if (id_user) q = q.eq('id_user', id_user);
-  if (kategori_id) q = q.eq('kategori_id', Number(kategori_id));
+  if (akun_id) q = q.eq('akun_id', Number(akun_id));
   if (start) q = q.gte('created_at', start);
   if (end) q = q.lt('created_at', end);
 
@@ -138,33 +131,75 @@ export async function listAruskas({
   return q.range(from, to);
 }
 
-
-export async function listForNeraca({ id_user, start, end }) {
+/**
+ * Neraca: agregasi via DETAIL (detail → produk → kategorial.neraca_identifier)
+ * Karena kategori_id di header laporan sudah di-drop.
+ */
+export async function listForNeracaByItems({ id_user, start, end }) {
+  // Ambil detail + header jenis + produk.kategori_id + kategori.neraca_identifier
   let q = supabase
-    .from('lapkeuangan')
-    .select('id_laporan, id_user, created_at, kategori_id, debit, kredit');
+    .from('detaillaporanbarang')
+    .select(`
+      subtotal,
+      laporan:laporan_id ( id_user, created_at, jenis ),
+      produk:produk_id ( kategori_id ),
+      kategori:produk_id!inner ( kategori_id )  -- dummy to force join? (lihat di bawah catatan)
+    `);
 
-  if (id_user) q = q.eq('id_user', id_user);
-  if (start) q = q.gte('created_at', start);
-  if (end)   q = q.lt('created_at', end);
+  // Catatan: Supabase edge syntax join bisa tricky.
+  // Cara aman: query terpisah:
+  // 1) fetch details + laporan + produk_id
+  // 2) fetch produk -> kategori_id map
+  // 3) fetch kategori -> neraca_identifier map
+  // Demi kesederhanaan, di bawah ini aku buat versi 2-langkah:
 
-  return q;
-}
+  // === Langkah 1: tarik detail + header + produk_id
+  let q1 = supabase
+    .from('detaillaporanbarang')
+    .select('subtotal, laporan:laporan_id(id_user, created_at, jenis), produk_id');
 
+  if (start) q1 = q1.gte('laporan.created_at', start);
+  if (end)   q1 = q1.lt('laporan.created_at', end);
 
-export async function listProdukByKategoriRanges(ranges, { created_by } = {}) {
-  if (!Array.isArray(ranges) || ranges.length === 0) {
-    return { data: [], error: null };
+  const d1 = await q1;
+  if (d1.error) return d1;
+  const rows = d1.data ?? [];
+
+  // Filter milik user (kalau ada)
+  const filtered = id_user ? rows.filter(r => r.laporan?.id_user === id_user) : rows;
+
+  // Kumpulkan produk_id unik
+  const produkIds = [...new Set(filtered.map(r => r.produk_id).filter(Boolean))];
+
+  // === Langkah 2: ambil kategori_id per produk
+  let pmap = {};
+  if (produkIds.length) {
+    const pr = await supabase
+      .from('produk')
+      .select('produk_id, kategori_id')
+      .in('produk_id', produkIds);
+    if (pr.error) return pr;
+    for (const p of pr.data ?? []) pmap[p.produk_id] = p.kategori_id;
   }
-  const orParts = ranges.map(r => `and(kategori_id.gte.${r.min},kategori_id.lte.${r.max})`).join(',');
 
-  let q = supabase
-    .from('produk')
-    .select('produk_id, nama, harga, kategori_id, created_by');
+  // === Langkah 3: ambil neraca_identifier per kategori
+  const kategoriIds = [...new Set(Object.values(pmap).filter(v => v !== null && v !== undefined))];
+  let kmap = {};
+  if (kategoriIds.length) {
+    const kr = await supabase
+      .from('kategorial')
+      .select('kategori_id, neraca_identifier')
+      .in('kategori_id', kategoriIds);
+    if (kr.error) return kr;
+    for (const k of kr.data ?? []) kmap[k.kategori_id] = k.neraca_identifier;
+  }
 
-  q = q.or(orParts);
+  // Build hasil: [{ jenis, subtotal, neraca_identifier }]
+  const mapped = filtered.map(r => ({
+    jenis: r.laporan?.jenis,
+    subtotal: Number(r.subtotal || 0),
+    neraca_identifier: kmap[pmap[r.produk_id]] ?? null
+  }));
 
-  if (created_by) q = q.eq('created_by', created_by);
-
-  return q;
+  return { data: mapped, error: null };
 }

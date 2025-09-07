@@ -1,7 +1,7 @@
-// src/controllers/finance.controller.js
+// src/controllers/finance_controller.js
 import { randomUUID } from 'crypto';
+import supabase from '../config/supabase.js';
 import {
-  getKategoriById,
   getProdukById,
   insertLaporan,
   insertDetailBarang,
@@ -11,39 +11,25 @@ import {
   deleteLaporan,
   sumProfitLoss,
   listAruskas,
-  listForNeraca,
-  listProdukByKategoriRanges
+  listForNeracaByItems,
 } from '../models/finance_model.js';
+import { getAkunKasById, incSaldoAkunKas } from '../models/akun_kas_model.js';
 
-function isAdmin(role) {
-  return role === 'admin' || role === 'superadmin';
-}
+function isAdmin(role) { return role === 'admin' || role === 'superadmin'; }
+function normalizeJenis(value) { return String(value || '').trim().toLowerCase(); }
 
-function normalizeJenis(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
-const GROUP_RANGES = {
-  aset_lancar: [{min: 0, max: 2599}],
-  aset_tetap:  [{min: 2600, max: 3599}],
-  kewajiban:  [{min: 4000, max: 4999}],
-}
-
-function inRange(num, {min, max}) {
-  return num >= min && num <= max;
-}
-
-function kelompokKategori(kategori_id) {
-  const id = Number(kategori_id) || 0;
-  if (GROUP_RANGES.aset_lancar.some(r => inRange(id, r))) return 'aset_lancar';
-  if (GROUP_RANGES.aset_tetap.some(r => inRange(id, r)))  return 'aset_tetap';
-  if (GROUP_RANGES.kewajiban.some(r => inRange(id, r)))   return 'kewajiban';
-  return 'lainnya';
-}
-
+/**
+ * POST /api/keuangan/laporan
+ * - jenis 'pemasukan' => debit > 0, kredit = 0
+ * - jenis 'pengeluaran' => kredit > 0, debit = 0
+ * - tidak ada kategori_id
+ * - items: [{ produk_id, jumlah, harga_satuan? | subtotal? }]
+ *   * total items harus sama dg debit/kredit sesuai jenis
+ * - akun_id opsional; jika ada => saldo_akhir += (debit - kredit)
+ */
 export async function createLaporan(req, res) {
   try {
-    const { jenis, kategori_id, deskripsi, debit, kredit, items } = req.body || {};
+    const { jenis, deskripsi, debit, kredit, items, akun_id } = req.body || {};
 
     const vJenis = normalizeJenis(jenis);
     if (!['pengeluaran', 'pemasukan'].includes(vJenis)) {
@@ -53,8 +39,6 @@ export async function createLaporan(req, res) {
     const d = Number(debit || 0);
     const k = Number(kredit || 0);
     if (d < 0 || k < 0) return res.status(400).json({ message: 'debit/kredit tidak boleh negatif' });
-
-    // ✅ aturan khusus
     if (vJenis === 'pemasukan' && !(d > 0 && k === 0)) {
       return res.status(400).json({ message: 'untuk pemasukan: isi debit > 0 dan kredit = 0' });
     }
@@ -62,53 +46,55 @@ export async function createLaporan(req, res) {
       return res.status(400).json({ message: 'untuk pengeluaran: isi kredit > 0 dan debit = 0' });
     }
 
-    // Validasi kategori
-    if (!kategori_id) return res.status(400).json({ message: 'kategori_id wajib diisi' });
-    const { data: kat, error: katErr } = await getKategoriById(kategori_id);
-    if (katErr || !kat) return res.status(400).json({ message: 'kategori_id tidak ditemukan' });
-    if (!['pengeluaran', 'pemasukan'].includes(kat.jenis) || kat.jenis !== vJenis) {
-      return res.status(400).json({ message: `kategori_id harus berjenis "${vJenis}"` });
+    // Validasi akun (opsional)
+    let akun = null;
+    if (akun_id !== undefined && akun_id !== null) {
+      const { data: ak, error: aerr } = await getAkunKasById(akun_id);
+      if (aerr || !ak) return res.status(400).json({ message: 'akun_id tidak ditemukan' });
+      const { data: u } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
+      const isOwner = ak.user_id && ak.user_id === req.user.user_id;
+      const sameCluster = ak.klaster_id && u?.klaster_id && ak.klaster_id === u.klaster_id;
+      if (!isAdmin(req.user.role) && !isOwner && !sameCluster) {
+        return res.status(403).json({ message: 'Forbidden: akun kas bukan milikmu/klastermu' });
+      }
+      akun = ak;
     }
 
     // Validasi & normalisasi items
     let normalizedItems = [];
     if (Array.isArray(items) && items.length) {
       for (const it of items) {
-        if (!it?.produk_id || !it?.jumlah) {
-          return res.status(400).json({ message: 'setiap item harus punya produk_id & jumlah' });
-        }
-        const { data: prod, error: pErr } = await getProdukById(it.produk_id);
-        if (pErr || !prod) return res.status(400).json({ message: `produk_id ${it.produk_id} tidak ditemukan` });
+        const pid = Number(it?.produk_id);
+        const jumlah = Number(it?.jumlah);
+        const hargaSatuan = it?.harga_satuan !== undefined ? Number(it.harga_satuan) : undefined;
+        const subtotalIn = it?.subtotal !== undefined ? Number(it.subtotal) : undefined;
 
-        const jumlah = Number(it.jumlah);
-        if (Number.isNaN(jumlah) || jumlah <= 0) {
-          return res.status(400).json({ message: 'jumlah harus angka > 0' });
+        if (Number.isNaN(pid) || pid <= 0) return res.status(400).json({ message: 'produk_id harus valid' });
+        if (Number.isNaN(jumlah) || jumlah <= 0) return res.status(400).json({ message: 'jumlah harus angka > 0' });
+
+        const { data: prod, error: pErr } = await getProdukById(pid);
+        if (pErr || !prod) return res.status(400).json({ message: `produk_id ${pid} tidak ditemukan` });
+
+        let subtotal;
+        if (hargaSatuan !== undefined) {
+          if (Number.isNaN(hargaSatuan) || hargaSatuan <= 0) return res.status(400).json({ message: 'harga_satuan harus angka > 0' });
+          subtotal = hargaSatuan * jumlah;
+        } else if (subtotalIn !== undefined) {
+          if (Number.isNaN(subtotalIn) || subtotalIn <= 0) return res.status(400).json({ message: 'subtotal harus angka > 0' });
+          subtotal = subtotalIn;
+        } else {
+          return res.status(400).json({ message: 'setiap item wajib punya harga_satuan atau subtotal' });
         }
 
-        const computed = prod.harga * jumlah;
-        const subtotal = it.subtotal !== undefined ? Number(it.subtotal) : computed;
-        if (Number.isNaN(subtotal) || subtotal <= 0) {
-          return res.status(400).json({ message: 'subtotal harus angka > 0' });
-        }
-
-        normalizedItems.push({
-          produk_id: prod.produk_id,
-          jumlah,
-          subtotal,
-        });
+        normalizedItems.push({ produk_id: pid, jumlah, subtotal });
       }
 
-      // Total items harus sama dengan nilai debit/kredit
       const totalItems = normalizedItems.reduce((a, b) => a + b.subtotal, 0);
       if (vJenis === 'pemasukan' && totalItems !== d) {
-        return res.status(400).json({
-          message: `total subtotal items (${totalItems}) harus sama dengan debit (${d})`,
-        });
+        return res.status(400).json({ message: `total subtotal items (${totalItems}) harus sama dengan debit (${d})` });
       }
       if (vJenis === 'pengeluaran' && totalItems !== k) {
-        return res.status(400).json({
-          message: `total subtotal items (${totalItems}) harus sama dengan kredit (${k})`,
-        });
+        return res.status(400).json({ message: `total subtotal items (${totalItems}) harus sama dengan kredit (${k})` });
       }
     }
 
@@ -117,8 +103,8 @@ export async function createLaporan(req, res) {
     const { data: header, error: hErr } = await insertLaporan({
       id_laporan,
       id_user: req.user.user_id,
+      akun_id: akun ? akun.akun_id : null,
       jenis: vJenis,
-      kategori_id,
       deskripsi,
       debit: d,
       kredit: k,
@@ -129,9 +115,18 @@ export async function createLaporan(req, res) {
     if (normalizedItems.length) {
       const det = await insertDetailBarang(id_laporan, normalizedItems);
       if (det.error) {
-        // rollback header bila detail gagal
         await deleteLaporan(id_laporan);
         return res.status(500).json({ message: 'Gagal menyimpan detail barang', detail: det.error.message });
+      }
+    }
+
+    // Update saldo_akhir akun (jika ada)
+    if (akun?.akun_id) {
+      const delta = d - k; // debit +, kredit -
+      const up = await incSaldoAkunKas(akun.akun_id, delta);
+      if (up.error) {
+        await deleteLaporan(id_laporan); // rollback agar konsisten
+        return res.status(500).json({ message: 'Gagal update saldo akun', detail: up.error.message });
       }
     }
 
@@ -141,15 +136,12 @@ export async function createLaporan(req, res) {
   }
 }
 
-/**
- * GET /api/keuangan/laporan
- * User biasa: hanya miliknya; Admin/Superadmin: bisa filter ?id_user=<uuid>
- */
+/** GET /api/keuangan/laporan */
 export async function listLaporanController(req, res) {
   const page = Math.max(1, Number(req.query.page ?? 1));
   const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
   const jenis = req.query.jenis ? normalizeJenis(req.query.jenis) : undefined;
-  const kategori_id = req.query.kategori_id ? Number(req.query.kategori_id) : undefined;
+  const akun_id = req.query.akun_id ? Number(req.query.akun_id) : undefined;
   const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
   const end = req.query.end ? new Date(req.query.end).toISOString() : undefined;
 
@@ -157,16 +149,14 @@ export async function listLaporanController(req, res) {
   const id_user = ownerOnly ? req.user.user_id : (req.query.id_user ?? undefined);
 
   const { data, error, count } = await listLaporan({
-    id_user, start, end, jenis, kategori_id, page, limit,
+    id_user, start, end, jenis, akun_id, page, limit,
   });
 
   if (error) return res.status(500).json({ message: 'Gagal mengambil laporan', detail: error.message });
   return res.json({ page, limit, total: count ?? data?.length ?? 0, data });
 }
 
-/**
- * GET /api/keuangan/laporan/:id
- */
+/** GET /api/keuangan/laporan/:id */
 export async function getLaporanDetail(req, res) {
   const id_laporan = String(req.params.id);
 
@@ -176,17 +166,20 @@ export async function getLaporanDetail(req, res) {
   const header = headerRes.data;
   if (!isAdmin(req.user.role) && header.id_user !== req.user.user_id) {
     return res.status(403).json({ message: 'Forbidden' });
-    }
+  }
 
   const detailsRes = await getLaporanDetails(id_laporan);
   if (detailsRes.error) return res.status(500).json({ message: 'Gagal ambil detail', detail: detailsRes.error.message });
 
-  return res.json({ header, details: detailsRes.data ?? [] });
+  const details = (detailsRes.data ?? []).map(it => ({
+    ...it,
+    harga_satuan: it.jumlah ? Math.floor(it.subtotal / it.jumlah) : null,
+  }));
+
+  return res.json({ header, details });
 }
 
-/**
- * DELETE /api/keuangan/laporan/:id
- */
+/** DELETE /api/keuangan/laporan/:id */
 export async function deleteLaporanController(req, res) {
   const id_laporan = String(req.params.id);
 
@@ -198,16 +191,22 @@ export async function deleteLaporanController(req, res) {
     return res.status(403).json({ message: 'Forbidden' });
   }
 
+  // Reversal saldo akun (jika ada)
+  if (header.akun_id) {
+    const delta = -(Number(header.debit || 0) - Number(header.kredit || 0));
+    const up = await incSaldoAkunKas(header.akun_id, delta);
+    if (up.error) {
+      return res.status(500).json({ message: 'Gagal update saldo akun (reversal)', detail: up.error.message });
+    }
+  }
+
   const del = await deleteLaporan(id_laporan);
   if (del.error) return res.status(500).json({ message: 'Gagal hapus', detail: del.error.message });
 
   return res.json({ message: 'Laporan dihapus' });
 }
 
-/**
- * GET /api/keuangan/laba-rugi?start=YYYY-MM-DD&end=YYYY-MM-DD
- * Aturan: debit = pemasukan, kredit = pengeluaran
- */
+/** GET /api/keuangan/laba-rugi?start=&end=&id_user= */
 export async function getLabaRugi(req, res) {
   const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
   const end = req.query.end ? new Date(req.query.end).toISOString() : undefined;
@@ -218,27 +217,12 @@ export async function getLabaRugi(req, res) {
   const { data, error } = await sumProfitLoss({ id_user, start, end });
   if (error) return res.status(500).json({ message: 'Gagal mengambil data', detail: error.message });
 
-  let totalPemasukan = 0;   // dari DEBIT
-  let totalPengeluaran = 0; // dari KREDIT
-  const perKategori = {};   // opsional: agregasi per kategori
+  let totalPemasukan = 0;   // DEBIT
+  let totalPengeluaran = 0; // KREDIT
 
   for (const row of data ?? []) {
-    if (row.jenis === 'pemasukan') {
-      const val = Number(row.debit || 0);
-      totalPemasukan += val;
-      if (row.kategori_id) {
-        perKategori[row.kategori_id] = perKategori[row.kategori_id] || { pemasukan: 0, pengeluaran: 0 };
-        perKategori[row.kategori_id].pemasukan += val;
-      }
-    }
-    if (row.jenis === 'pengeluaran') {
-      const val = Number(row.kredit || 0);
-      totalPengeluaran += val;
-      if (row.kategori_id) {
-        perKategori[row.kategori_id] = perKategori[row.kategori_id] || { pemasukan: 0, pengeluaran: 0 };
-        perKategori[row.kategori_id].pengeluaran += val;
-      }
-    }
+    if (row.jenis === 'pemasukan') totalPemasukan += Number(row.debit || 0);
+    if (row.jenis === 'pengeluaran') totalPengeluaran += Number(row.kredit || 0);
   }
 
   const labaRugi = totalPemasukan - totalPengeluaran;
@@ -247,126 +231,141 @@ export async function getLabaRugi(req, res) {
     periode: { start: start ?? null, end: end ?? null },
     total_pemasukan: totalPemasukan,
     total_pengeluaran: totalPengeluaran,
-    laba_rugi: labaRugi,
-    per_kategori: perKategori,
+    laba_rugi: labaRugi
   });
-
 }
 
+/** GET /api/keuangan/arus-kas?arah=masuk|keluar&akun_id=&start=&end=&page=&limit= */
 export async function getArusKas(req, res) {
-    const arah = String(req.query.arah || '').toLowerCase();
-    if (!['masuk', 'keluar'].includes(arah)) {
-      return res.status(400).json({ message: 'param arah harus "masuk" atau "keluar"' });
+  const arah = String(req.query.arah || '').toLowerCase();
+  if (!['masuk', 'keluar'].includes(arah)) {
+    return res.status(400).json({ message: 'param arah harus "masuk" atau "keluar"' });
+  }
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
+  const akun_id = req.query.akun_id ? Number(req.query.akun_id) : undefined;
+
+  const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
+  const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
+
+  const isAdm = isAdmin(req.user.role);
+  const id_user = isAdm ? (req.query.id_user ?? undefined) : req.user.user_id;
+
+  const { data, error, count } = await listAruskas({
+    id_user, start, end, arah, akun_id, page, limit,
+  });
+  if (error) return res.status(500).json({ message: 'Gagal mengambil arus kas', detail: error.message });
+
+  const total_nilai = (data ?? []).reduce((acc, row) => {
+    return acc + (arah === 'masuk' ? Number(row.debit || 0) : Number(row.kredit || 0));
+  }, 0);
+
+  return res.json({
+    meta: { arah, page, limit, total_rows: count ?? (data?.length ?? 0), total_nilai },
+    data
+  });
+}
+
+// ---- NERACA via detail items + neraca_identifier
+const RANGES = {
+  aset_lancar:  { min: 0,    max: 2599 },
+  aset_tetap:   { min: 2600, max: 3599 },
+  kewajiban:    { min: 4000, max: 4999 },
+};
+
+export async function getNeraca(req, res) {
+  const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
+  const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
+
+  const ownerOnly = !isAdmin(req.user.role);
+  const id_user = ownerOnly ? req.user.user_id : (req.query.id_user ?? undefined);
+
+  const resp = await listForNeracaByItems({ id_user, start, end });
+  if (resp.error) return res.status(500).json({ message: 'Gagal mengambil data neraca', detail: resp.error.message });
+
+  const sumByRange = (min, max) => {
+    let debit = 0, kredit = 0;
+    for (const r of resp.data ?? []) {
+      const ni = r.neraca_identifier;
+      if (ni === null || ni === undefined) continue;
+      if (ni >= min && ni <= max) {
+        if (r.jenis === 'pemasukan') debit += r.subtotal;
+        else if (r.jenis === 'pengeluaran') kredit += r.subtotal;
+      }
     }
-    const page = Math.max(1, Number(req.query.page ?? 1));
-    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
-    const kategori_id = req.query.kategori_id ? Number(req.query.kategori_id) : undefined;
+    return { debit, kredit, saldo: debit - kredit };
+  };
 
-    // rentang tanggal
-    const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
-    const end = req.query.end ? new Date(req.query.end).toISOString() : undefined;
-    // akses data: 
-    const isAdmin = (req.user.role === 'admin' || req.user.role === 'superadmin');
-    const id_user = isAdmin ? (req.query.id_user ?? undefined) : req.user.user_id;
+  const asetLancar = sumByRange(RANGES.aset_lancar.min, RANGES.aset_lancar.max);
+  const asetTetap  = sumByRange(RANGES.aset_tetap.min,  RANGES.aset_tetap.max);
+  const kewajiban  = sumByRange(RANGES.kewajiban.min,   RANGES.kewajiban.max);
 
-    const { data, error, count } = await listAruskas({
-      id_user, start, end, arah, kategori_id, page, limit,
-    });
+  return res.json({
+    periode: { start: start ?? null, end: end ?? null },
+    aset_lancar: asetLancar,
+    aset_tetap: asetTetap,
+    kewajiban: kewajiban,
+    total_aset: asetLancar.saldo + asetTetap.saldo,
+    total_kewajiban: kewajiban.saldo,
+    seimbang: (asetLancar.saldo + asetTetap.saldo) === kewajiban.saldo
+  });
+}
 
-    if (error) return res.status(500).json({ message: 'Gagal mengambil arus kas', detail: error.message });
-
-    // total nilai untuk arah yang diminta
-    const total_nilai = (data ?? []).reduce((acc, row) => {
-      if (arah === 'masuk') return acc + Number(row.debit || 0);
-      return acc + Number(row.kredit || 0);
-    }, 0);
-
-    return res.json({
-      meta:{
-        arah, page, limit,
-        total_rowsL: count ?? (data?.length ?? 0),
-        total_nilai
-      },
-      data
-    })
+export async function getArusKasByAkun(req, res) {
+  const akun_id = Number(req.query.akun_id);
+  if (Number.isNaN(akun_id)) {
+    return res.status(400).json({ message: 'akun_id wajib angka' });
   }
 
-  // GET NERACA
+  // validasi kepemilikan akun kas
+  const { data: akun, error: akunErr } = await getAkunKasById(akun_id);
+  if (akunErr || !akun) return res.status(404).json({ message: 'Akun kas tidak ditemukan' });
 
- export async function getNeraca(req, res) {
-  try {
-    const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
-    const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
+  const { data: me } = await supabase
+    .from('User')
+    .select('klaster_id')
+    .eq('user_id', req.user.user_id)
+    .single();
 
-    const userIsAdmin = (req.user.role === 'admin' || req.user.role === 'superadmin');
-    const id_user = userIsAdmin ? (req.query.id_user ?? undefined) : req.user.user_id;
+  const admin = req.user.role === 'admin' || req.user.role === 'superadmin';
+  const owner = akun.user_id && akun.user_id === req.user.user_id;
+  const sameCluster = akun.klaster_id && me?.klaster_id && akun.klaster_id === me.klaster_id;
+  if (!admin && !owner && !sameCluster) {
+    return res.status(403).json({ message: 'Forbidden: akun kas bukan milikmu/klastermu' });
+  }
 
-    // 1) Ambil baris lapkeuangan untuk hitung debit/kredit per kelompok
-    const { data: rows, error } = await listForNeraca({ id_user, start, end });
-    if (error) return res.status(500).json({ message: 'Gagal mengambil data neraca', detail: error.message });
+  const page  = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 10)));
+  const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
+  const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
 
-    const agg = {
-      aset_lancar: { debit: 0, kredit: 0 },
-      aset_tetap:  { debit: 0, kredit: 0 },
-      kewajiban:   { debit: 0, kredit: 0 },
-      lainnya:     { debit: 0, kredit: 0 },
-    };
+  // bila admin, boleh lihat transaksi user lain di akun ini via ?id_user=; kalau tidak diisi, ambil semua di akun tsb
+  const id_user = admin ? (req.query.id_user ?? undefined) : req.user.user_id;
 
-    for (const r of rows ?? []) {
-      const grp = kelompokKategori(r.kategori_id);
-      agg[grp].debit  += Number(r.debit || 0);
-      agg[grp].kredit += Number(r.kredit || 0);
-    }
+  // ambil dua arah sekaligus
+  const [masukRes, keluarRes] = await Promise.all([
+    listAruskas({ id_user, start, end, arah: 'masuk',  akun_id, page, limit }),
+    listAruskas({ id_user, start, end, arah: 'keluar', akun_id, page, limit }),
+  ]);
 
-    const total_debit  = Object.values(agg).reduce((a, v) => a + v.debit, 0);
-    const total_kredit = Object.values(agg).reduce((a, v) => a + v.kredit, 0);
+  if (masukRes.error)  return res.status(500).json({ message: 'Gagal ambil arus kas masuk',  detail: masukRes.error.message });
+  if (keluarRes.error) return res.status(500).json({ message: 'Gagal ambil arus kas keluar', detail: keluarRes.error.message });
 
-    // 2) Ambil produk per kelompok kategori (opsional filter created_by lewat query)
-    //    Misal admin ingin hanya produk yang dibuat oleh dirinya: ?created_by=<uuid>
-    const created_by = req.query.created_by ? String(req.query.created_by) : undefined;
+  const totalMasuk  = (masukRes.data  ?? []).reduce((a, r) => a + Number(r.debit  || 0), 0);
+  const totalKeluar = (keluarRes.data ?? []).reduce((a, r) => a + Number(r.kredit || 0), 0);
 
-    // Gabungkan semua rentang yang didefinisikan (tanpa "lainnya")
-    const allRanges = [
-      ...GROUP_RANGES.aset_lancar,
-      ...GROUP_RANGES.aset_tetap,
-      ...GROUP_RANGES.kewajiban,
-    ];
-
-    const { data: produkList, error: prodErr } =
-      await listProdukByKategoriRanges(allRanges, { created_by });
-    if (prodErr) {
-      return res.status(500).json({ message: 'Gagal mengambil produk', detail: prodErr.message });
-    }
-
-    const produk_by_kelompok = {
-      aset_lancar: [],
-      aset_tetap: [],
-      kewajiban: [],
-      lainnya: []   // produk dengan kategori_id di luar rentang masuk sini (kemungkinan kecil)
-    };
-
-    for (const p of produkList ?? []) {
-      const grp = kelompokKategori(p.kategori_id);
-      produk_by_kelompok[grp].push({
-        produk_id: p.produk_id,
-        nama: p.nama,
-        harga: p.harga,
-        kategori_id: p.kategori_id,
-        created_by: p.created_by
-      });
-    }
-
-    return res.json({
+  return res.json({
+    meta: {
+      akun_id,
       periode: { start: start ?? null, end: end ?? null },
-      kelompok: agg,
-      ringkasan: {
-        total_debit,
-        total_kredit,
-        seimbang: total_debit === total_kredit
-      },
-      produk_by_kelompok
-    });
-  } catch (e) {
-    return res.status(500).json({ message: 'Internal error', detail: e.message });
-  }
+      page, limit,
+      total_rows_masuk:  masukRes.count  ?? (masukRes.data?.length  ?? 0),
+      total_rows_keluar: keluarRes.count ?? (keluarRes.data?.length ?? 0),
+      total_masuk:  totalMasuk,
+      total_keluar: totalKeluar,
+      net: totalMasuk - totalKeluar
+    },
+    masuk:  masukRes.data  ?? [],
+    keluar: keluarRes.data ?? []
+  });
 }
