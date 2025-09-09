@@ -146,13 +146,6 @@ export async function listForNeracaByItems({ id_user, start, end }) {
       kategori:produk_id!inner ( kategori_id )  -- dummy to force join? (lihat di bawah catatan)
     `);
 
-  // Catatan: Supabase edge syntax join bisa tricky.
-  // Cara aman: query terpisah:
-  // 1) fetch details + laporan + produk_id
-  // 2) fetch produk -> kategori_id map
-  // 3) fetch kategori -> neraca_identifier map
-  // Demi kesederhanaan, di bawah ini aku buat versi 2-langkah:
-
   // === Langkah 1: tarik detail + header + produk_id
   let q1 = supabase
     .from('detaillaporanbarang')
@@ -202,4 +195,63 @@ export async function listForNeracaByItems({ id_user, start, end }) {
   }));
 
   return { data: mapped, error: null };
+}
+
+export async function listForNeracaExpanded({ id_user, start, end }) {
+  // 1) detail + header (jenis, created_at) + produk_id
+  let q1 = supabase
+    .from('detaillaporanbarang')
+    .select('subtotal, laporan:laporan_id(id_user, created_at, jenis), produk_id');
+
+  if (start) q1 = q1.gte('laporan.created_at', start);
+  if (end)   q1 = q1.lt('laporan.created_at', end);
+
+  const d1 = await q1;
+  if (d1.error) return d1;
+  const rows = (id_user ? (d1.data ?? []).filter(r => r.laporan?.id_user === id_user) : (d1.data ?? []));
+
+  if (!rows.length) return { data: [], error: null };
+
+  // 2) ambil map produk: { produk_id -> { nama, kategori_id } }
+  const produkIds = [...new Set(rows.map(r => r.produk_id).filter(Boolean))];
+  const pr = await supabase
+    .from('produk')
+    .select('produk_id, nama, kategori_id')
+    .in('produk_id', produkIds);
+  if (pr.error) return pr;
+  const pmap = {};
+  for (const p of pr.data ?? []) pmap[p.produk_id] = { nama: p.nama, kategori_id: p.kategori_id };
+
+  // 3) ambil map kategori: { kategori_id -> { neraca_identifier, nama } }
+  const kategoriIds = [...new Set(Object.values(pmap).map(v => v?.kategori_id).filter(v => v != null))];
+  let kmap = {};
+  if (kategoriIds.length) {
+    const kr = await supabase
+      .from('kategorial')
+      .select('kategori_id, neraca_identifier, nama, sub_kelompok')
+      .in('kategori_id', kategoriIds);
+    if (kr.error) return kr;
+    for (const k of kr.data ?? []) kmap[k.kategori_id] = {
+      neraca_identifier: k.neraca_identifier,
+      nama: k.nama,
+      sub_kelompok: k.sub_kelompok
+    };
+  }
+
+  const expanded = rows.map(r => {
+    const pinfo = pmap[r.produk_id] ?? { nama: null, kategori_id: null };
+    const kinfo = pinfo.kategori_id != null ? kmap[pinfo.kategori_id] : { neraca_identifier: null, nama: null, sub_kelompok: null };
+    return {
+      jenis: r.laporan?.jenis ?? null,
+      subtotal: Number(r.subtotal || 0),
+      produk_id: r.produk_id ?? null,
+      produk_nama: pinfo.nama,
+      kategori_id: pinfo.kategori_id,
+      neraca_identifier: kinfo.neraca_identifier ?? null,
+      kategori_nama: kinfo.nama ?? null,
+      sub_kelompok: kinfo.sub_kelompok ?? null,
+    };
+  });
+
+  return { data: expanded, error: null };
 }

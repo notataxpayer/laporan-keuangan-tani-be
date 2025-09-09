@@ -10,13 +10,17 @@ router.post('/', authRequired, create);
 router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
 
 // ----- Swagger -----
+// ----- Swagger -----
 /**
  * @openapi
  * /kategori:
  *   get:
  *     summary: List kategori
- *     security:
- *       - BearerAuth: []
+ *     description: |
+ *       Mengembalikan daftar kategori yang bisa diakses user.  
+ *       - Viewer user hanya akan melihat kategori miliknya sendiri atau klasternya.  
+ *       - Bisa difilter dengan `jenis` atau `search`.
+ *     security: [ { BearerAuth: [] } ]
  *     tags: [Kategori]
  *     parameters:
  *       - in: query
@@ -24,26 +28,39 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *         schema:
  *           type: string
  *           enum: [pengeluaran, pemasukan, produk, pasar]
+ *         description: Filter kategori berdasarkan jenis.
  *       - in: query
  *         name: search
- *         schema:
- *           type: string
+ *         schema: { type: string }
+ *         description: Cari berdasarkan nama kategori (ILIKE).
  *       - in: query
  *         name: page
- *         schema:
- *           type: integer
- *           default: 1
+ *         schema: { type: integer, minimum: 1, default: 1 }
  *       - in: query
  *         name: limit
- *         schema:
- *           type: integer
- *           default: 20
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
  *     responses:
- *       200: { description: OK }
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 page: { type: integer, example: 1 }
+ *                 limit: { type: integer, example: 20 }
+ *                 total: { type: integer, example: 42 }
+ *                 data:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/Kategori' }
+ *       401: { description: Unauthorized }
  *   post:
  *     summary: Buat kategori
- *     security:
- *       - BearerAuth: []
+ *     description: |
+ *       Membuat kategori baru.  
+ *       - `neraca_identifier` akan otomatis ditetapkan oleh sistem sesuai jenis & scope (user/klaster).  
+ *       - Hanya field `nama` dan `jenis` yang diperlukan.
+ *     security: [ { BearerAuth: [] } ]
  *     tags: [Kategori]
  *     requestBody:
  *       required: true
@@ -55,21 +72,36 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *             properties:
  *               nama:
  *                 type: string
- *                 example: Setoran Modal
+ *                 example: "Setoran Modal"
  *               jenis:
  *                 type: string
  *                 enum: [pengeluaran, pemasukan, produk, pasar]
+ *                 example: "pemasukan"
  *     responses:
- *       201: { description: Kategori dibuat }
+ *       201:
+ *         description: Kategori dibuat
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string, example: "Kategori dibuat" }
+ *                 data: { $ref: '#/components/schemas/Kategori' }
  *       400: { description: Validasi gagal }
+ *       401: { description: Unauthorized }
  */
+
 /**
  * @openapi
  * /kategori/{id}:
  *   delete:
- *     summary: Hapus kategori (admin/superadmin)
- *     security:
- *       - BearerAuth: []
+ *     summary: Hapus kategori (admin/superadmin atau pemilik kategori)
+ *     description: |
+ *       Menghapus kategori bila tidak dipakai.  
+ *       - Admin/superadmin selalu boleh.  
+ *       - User biasa hanya boleh hapus kategori miliknya atau klasternya.  
+ *       - Tidak bisa dihapus bila kategori masih dipakai produk atau laporan keuangan.
+ *     security: [ { BearerAuth: [] } ]
  *     tags: [Kategori]
  *     parameters:
  *       - in: path
@@ -77,8 +109,24 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *         required: true
  *         schema: { type: integer }
  *     responses:
- *       200: { description: Kategori dihapus }
+ *       200:
+ *         description: Kategori dihapus
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string, example: "Kategori dihapus" }
+ *       401: { description: Unauthorized }
+ *       403: { description: Forbidden (bukan pemilik/admin) }
  *       404: { description: Tidak ditemukan }
- *       409: { description: Kategori sedang dipakai }
+ *       409:
+ *         description: Kategori dipakai oleh produk/laporan
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string, example: "Kategori dipakai di laporan keuangan—tidak bisa dihapus" }
  */
 export default router;

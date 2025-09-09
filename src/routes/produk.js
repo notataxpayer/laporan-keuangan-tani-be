@@ -15,6 +15,7 @@ router.patch('/:id', authRequired, roleGuard('admin', 'superadmin'), update);
 router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
 
 // swagger docs
+// swagger docs
 /**
  * @openapi
  * /produk:
@@ -51,6 +52,10 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *       401: { description: Unauthorized }
  *   post:
  *     summary: Buat produk (admin/superadmin)
+ *     description: |
+ *       Membuat produk baru.  
+ *       - Jika **kategori_id** tidak dikirim, Anda bisa kirim **kategori_nama**.  
+ *       - Jika **kategori_nama** juga tidak ada, sistem akan **cari** kategori berdasarkan **nama produk**; bila belum ada maka **dibuat otomatis** (auto-create) memakai rules klasifikasi (aset lancar/tetap/kewajiban).
  *     security: [ { BearerAuth: [] } ]
  *     tags: [Produk]
  *     requestBody:
@@ -59,11 +64,29 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [nama, harga]
+ *             required: [nama]
  *             properties:
- *               nama: { type: string, example: "Beras IR64 Premium" }
- *               harga: { type: integer, example: 12000 }
- *               kategori_id: { type: integer, nullable: true, example: 1 }
+ *               nama:
+ *                 type: string
+ *                 example: "Panen Kentang"
+ *               kategori_id:
+ *                 type: integer
+ *                 nullable: true
+ *                 example: 1
+ *               kategori_nama:
+ *                 type: string
+ *                 description: Bila tidak mengirim kategori_id, sistem akan pakai nama ini untuk mencari/auto-create kategori.
+ *                 example: "Persediaan Panen"
+ *           examples:
+ *             simple:
+ *               summary: Auto kategori dari nama produk
+ *               value: { "nama": "Panen Kentang" }
+ *             withKategoriNama:
+ *               summary: Pakai kategori_nama (auto-create jika belum ada)
+ *               value: { "nama": "Cicilan Traktor", "kategori_nama": "Utang Investasi Alat" }
+ *             withKategoriId:
+ *               summary: Langsung rujuk kategori_id
+ *               value: { "nama": "Pupuk Urea 50kg", "kategori_id": 5 }
  *     responses:
  *       201:
  *         description: Produk dibuat
@@ -74,7 +97,15 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *               properties:
  *                 message: { type: string, example: "Produk dibuat" }
  *                 data:    { $ref: '#/components/schemas/Produk' }
- *       400: { description: Validasi gagal }
+ *       400:
+ *         description: Validasi gagal
+ *         content:
+ *           application/json:
+ *             examples:
+ *               namaKosong:
+ *                 value: { "message": "Validasi gagal", "errors": ["nama wajib diisi"] }
+ *               kategoriNamaKosong:
+ *                 value: { "message": "Validasi gagal", "errors": ["kategori_nama tidak boleh string kosong"] }
  *       401: { description: Unauthorized }
  *       403: { description: Forbidden (bukan admin/superadmin) }
  */
@@ -104,6 +135,10 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *       404: { description: Tidak ditemukan }
  *   patch:
  *     summary: Update produk (admin/superadmin)
+ *     description: |
+ *       Update sebagian field produk.  
+ *       - Bisa mengubah kategori via **kategori_id** atau **kategori_nama**.  
+ *       - Jika **kategori_nama** belum ada, kategori akan **dibuat otomatis** berdasarkan rules.
  *     security: [ { BearerAuth: [] } ]
  *     tags: [Produk]
  *     parameters:
@@ -118,9 +153,26 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *           schema:
  *             type: object
  *             properties:
- *               nama: { type: string, example: "Beras IR64 Premium 5kg" }
- *               harga: { type: integer, example: 12500 }
- *               kategori_id: { type: integer, nullable: true, example: 1 }
+ *               nama:
+ *                 type: string
+ *                 example: "Beras IR64 Premium 5kg"
+ *               kategori_id:
+ *                 type: integer
+ *                 nullable: true
+ *                 example: 1
+ *               kategori_nama:
+ *                 type: string
+ *                 example: "Utang Dagang Supplier"
+ *           examples:
+ *             renameOnly:
+ *               summary: Ubah nama saja
+ *               value: { "nama": "Pupuk Kompos Organik" }
+ *             moveById:
+ *               summary: Pindah kategori via ID
+ *               value: { "kategori_id": 3 }
+ *             moveByName:
+ *               summary: Pindah kategori via nama (auto-create jika belum ada)
+ *               value: { "kategori_nama": "Lahan Sawah" }
  *     responses:
  *       200:
  *         description: Produk diupdate
@@ -131,7 +183,15 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *               properties:
  *                 message: { type: string, example: "Produk diupdate" }
  *                 data:    { $ref: '#/components/schemas/Produk' }
- *       400: { description: Validasi gagal / ID tidak valid }
+ *       400:
+ *         description: Validasi gagal / ID tidak valid / tidak ada field yang diupdate
+ *         content:
+ *           application/json:
+ *             examples:
+ *               idInvalid:
+ *                 value: { "message": "Param id tidak valid" }
+ *               noField:
+ *                 value: { "message": "Tidak ada field yang diupdate" }
  *       401: { description: Unauthorized }
  *       403: { description: Forbidden (bukan admin/superadmin) }
  *       404: { description: Tidak ditemukan }
@@ -157,5 +217,4 @@ router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
  *       403: { description: Forbidden (bukan admin/superadmin) }
  *       404: { description: Tidak ditemukan }
  */
-
 export default router;

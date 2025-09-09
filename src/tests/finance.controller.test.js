@@ -1,25 +1,26 @@
-// src/tests/finance.controller.test.js
+// src/controllers/finance_controller.test.js
 import { jest } from '@jest/globals';
 
-// (opsional) supaya log dotenv tidak berisik saat test
-beforeAll(() => {
-  process.env.DOTENV_CONFIG_SILENT = 'true';
-});
+// ============ Mocks ============
 
-// ---- mock supabase (dipakai utk cek klaster user pada beberapa path) ----
-jest.unstable_mockModule('../config/supabase.js', () => ({
-  default: {
-    from: (table) => ({
-      select: () => ({
-        eq: () => ({
-          single: async () => ({ data: { klaster_id: null }, error: null }),
-        }),
+// crypto.randomUUID → nilai deterministik
+const uuidMock = { randomUUID: jest.fn(() => 'uuid-1') };
+jest.unstable_mockModule('crypto', () => uuidMock);
+
+// supabase (hanya dipakai untuk SELECT klaster_id user)
+const supabaseMock = { from: jest.fn() };
+function mockUserKlaster(klaster_id = null) {
+  supabaseMock.from.mockReturnValue({
+    select: () => ({
+      eq: () => ({
+        single: async () => ({ data: { klaster_id }, error: null }),
       }),
     }),
-  },
-}));
+  });
+}
+jest.unstable_mockModule('../config/supabase.js', () => ({ default: supabaseMock }));
 
-// ---- mock finance models ----
+// finance_model functions
 const fm = {
   getProdukById: jest.fn(),
   insertLaporan: jest.fn(),
@@ -30,164 +31,361 @@ const fm = {
   deleteLaporan: jest.fn(),
   sumProfitLoss: jest.fn(),
   listAruskas: jest.fn(),
-  listForNeracaByItems: jest.fn(), // tidak dipakai di test ini
+  listForNeracaByItems: jest.fn(),
+  listForNeracaExpanded: jest.fn(),
 };
+jest.unstable_mockModule('../models/finance_model.js', () => ({ ...fm }));
 
-jest.unstable_mockModule('../models/finance_model.js', () => ({
-  getProdukById: fm.getProdukById,
-  insertLaporan: fm.insertLaporan,
-  insertDetailBarang: fm.insertDetailBarang,
-  getLaporanHeader: fm.getLaporanHeader,
-  getLaporanDetails: fm.getLaporanDetails,
-  listLaporan: fm.listLaporan,
-  deleteLaporan: fm.deleteLaporan,
-  sumProfitLoss: fm.sumProfitLoss,
-  listAruskas: fm.listAruskas,
-  listForNeracaByItems: fm.listForNeracaByItems,
-}));
-
-// ---- mock akun kas model (avoid saldo update on create by not sending akun_id) ----
-jest.unstable_mockModule('../models/akun_kas_model.js', () => ({
+// akun kas model
+const akm = {
   getAkunKasById: jest.fn(),
   incSaldoAkunKas: jest.fn(),
-}));
+};
+jest.unstable_mockModule('../models/akun_kas_model.js', () => ({ ...akm }));
 
-// Import controller SETELAH semua mock di atas
-const finance = await import('../controllers/finance_controller.js');
+// (import controller setelah semua mock terpasang)
+const ctrl = await import('../controllers/finance_controller.js');
 
-function resMock() {
+// ============ Helpers ============
+const mkRes = () => {
   const res = {};
-  res.statusCode = 200;
-  res.status = (c) => ((res.statusCode = c), res);
-  res.json = (b) => ((res.body = b), res);
+  res.status = jest.fn().mockReturnValue(res);
+  res.json = jest.fn().mockReturnValue(res);
   return res;
-}
+};
+const mkReq = (over = {}) => ({
+  user: { user_id: 'u-1', role: 'user' },
+  body: {},
+  params: {},
+  query: {},
+  ...over,
+});
 
-describe('finance.controller (minimal tests)', () => {
-  const user = { user_id: 'u-1', role: 'user' };
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
-  beforeEach(() => jest.clearAllMocks());
+// ============ createLaporan ============
+test('createLaporan: validasi jenis salah', async () => {
+  const req = mkReq({ body: { jenis: 'lain', debit: 0, kredit: 0 } });
+  const res = mkRes();
+  await ctrl.createLaporan(req, res);
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(res.json).toHaveBeenCalledWith({ message: 'jenis harus "pengeluaran" atau "pemasukan"' });
+});
 
-  test('POST createLaporan (pemasukan) → 201 sukses', async () => {
-    // dua produk, total 20.000
-    fm.getProdukById.mockImplementation(async (id) => ({
-      data: { produk_id: id, nama: `P${id}`, kategori_id: 10 },
-      error: null,
-    }));
+test('createLaporan: pemasukan tapi debit/kredit tidak sesuai aturan', async () => {
+  const req = mkReq({ body: { jenis: 'pemasukan', debit: 0, kredit: 10 } });
+  const res = mkRes();
+  await ctrl.createLaporan(req, res);
+  expect(res.status).toHaveBeenCalledWith(400);
+});
 
-    // Kembalikan payload yang dikirim controller supaya bisa kita verifikasi lagi
-    fm.insertLaporan.mockImplementation(async (payload) => ({
-      data: payload,
-      error: null,
-    }));
-
-    fm.insertDetailBarang.mockResolvedValue({ error: null });
-
-    const req = {
-      user,
-      body: {
-        jenis: 'pemasukan',
-        deskripsi: 'Tes',
-        debit: 20000,
-        kredit: 0,
-        items: [
-          { produk_id: 2, jumlah: 1, harga_satuan: 10000 },
-          { produk_id: 3, jumlah: 1, harga_satuan: 10000 },
-        ],
-      },
-    };
-    const res = resMock();
-
-    await finance.createLaporan(req, res);
-
-    expect(res.statusCode).toBe(201);
-    expect(fm.insertLaporan).toHaveBeenCalled();
-    expect(fm.insertDetailBarang).toHaveBeenCalled();
-
-    // Ambil ID yang benar-benar dipakai saat menyimpan detail
-    const usedId = fm.insertDetailBarang.mock.calls[0][0];
-    const usedItems = fm.insertDetailBarang.mock.calls[0][1];
-
-    // Pastikan ID berformat string UUID (cek longgar)
-    expect(usedId).toMatch(/^[0-9a-f-]{36}$/i);
-
-    // Pastikan insertLaporan dipanggil dengan ID yang sama
-    expect(fm.insertLaporan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id_laporan: usedId,
-        id_user: user.user_id,
-        jenis: 'pemasukan',
-        deskripsi: 'Tes',
-        debit: 20000,
-        kredit: 0,
-        // akun_id seharusnya null bila tidak dikirim
-        akun_id: null,
-      })
-    );
-
-    // Validasi item yang dikirim ke insertDetailBarang
-    expect(usedItems).toEqual([
-      { produk_id: 2, jumlah: 1, subtotal: 10000 },
-      { produk_id: 3, jumlah: 1, subtotal: 10000 },
-    ]);
+test('createLaporan: validasi akun kas - forbidden (bukan owner/klaster/admin)', async () => {
+  mockUserKlaster(11); // user di klaster 11
+  // akun milik user lain dan klaster lain
+  akm.getAkunKasById.mockResolvedValue({
+    data: { akun_id: 5, user_id: 'u-xyz', klaster_id: 99 },
+    error: null,
   });
 
-  test('GET listLaporan → 200', async () => {
-    fm.listLaporan.mockResolvedValue({
-      data: [
-        { id_laporan: 'a', jenis: 'pemasukan', debit: 10000, kredit: 0 },
-        { id_laporan: 'b', jenis: 'pengeluaran', debit: 0, kredit: 5000 },
-      ],
-      error: null,
-      count: 2,
-    });
+  const req = mkReq({
+    body: { jenis: 'pemasukan', debit: 1000, kredit: 0, items: [], akun_id: 5 },
+  });
+  const res = mkRes();
 
-    const req = { user, query: { page: 1, limit: 10 } };
-    const res = resMock();
+  await ctrl.createLaporan(req, res);
+  expect(res.status).toHaveBeenCalledWith(403);
+  expect(res.json).toHaveBeenCalledWith({ message: 'Forbidden: akun kas bukan milikmu/klastermu' });
+});
 
-    await finance.listLaporanController(req, res);
+test('createLaporan: validasi items - total tidak sama dengan debit', async () => {
+  akm.getAkunKasById.mockResolvedValue({
+    data: { akun_id: 1, user_id: 'u-1', klaster_id: null },
+    error: null,
+  });
+  fm.getProdukById.mockResolvedValue({ data: { produk_id: 7 }, error: null });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.body.total).toBe(2);
+  const req = mkReq({
+    body: {
+      jenis: 'pemasukan',
+      debit: 1000,
+      kredit: 0,
+      akun_id: 1,
+      items: [{ produk_id: 7, jumlah: 2, subtotal: 300 }], // total 600 ≠ 1000
+    },
+  });
+  const res = mkRes();
+
+  await ctrl.createLaporan(req, res);
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(res.json.mock.calls[0][0].message).toMatch(/total subtotal items/);
+});
+
+test('createLaporan: sukses pemasukan dengan akun & items (insert header, detail, update saldo)', async () => {
+  mockUserKlaster(null);
+  akm.getAkunKasById.mockResolvedValue({
+    data: { akun_id: 1, user_id: 'u-1', klaster_id: null },
+    error: null,
+  });
+  fm.getProdukById.mockResolvedValue({ data: { produk_id: 7 }, error: null });
+  fm.insertLaporan.mockResolvedValue({ data: { id_laporan: 'uuid-1', debit: 1000, kredit: 0 }, error: null });
+  fm.insertDetailBarang.mockResolvedValue({ error: null });
+  akm.incSaldoAkunKas.mockResolvedValue({ error: null });
+
+  const req = mkReq({
+    body: {
+      jenis: 'pemasukan',
+      debit: 1000,
+      kredit: 0,
+      akun_id: 1,
+      items: [{ produk_id: 7, jumlah: 2, harga_satuan: 500 }], // subtotal 1000
+    },
+  });
+  const res = mkRes();
+
+  await ctrl.createLaporan(req, res);
+
+  expect(fm.insertLaporan).toHaveBeenCalledWith(expect.objectContaining({
+    id_laporan: 'uuid-1',
+    jenis: 'pemasukan',
+    debit: 1000,
+    kredit: 0,
+  }));
+  expect(fm.insertDetailBarang).toHaveBeenCalledWith('uuid-1', [{ produk_id: 7, jumlah: 2, subtotal: 1000 }]);
+  expect(akm.incSaldoAkunKas).toHaveBeenCalledWith(1, 1000); // delta = debit - kredit
+  expect(res.status).toHaveBeenCalledWith(201);
+});
+
+test('createLaporan: gagal insert detail → rollback header & 500', async () => {
+  akm.getAkunKasById.mockResolvedValue({
+    data: { akun_id: 1, user_id: 'u-1', klaster_id: null },
+    error: null,
+  });
+  fm.getProdukById.mockResolvedValue({ data: { produk_id: 7 }, error: null });
+  fm.insertLaporan.mockResolvedValue({ data: { id_laporan: 'uuid-1' }, error: null });
+  fm.insertDetailBarang.mockResolvedValue({ error: { message: 'insert detail error' } });
+  fm.deleteLaporan.mockResolvedValue({ error: null });
+
+  const req = mkReq({
+    body: {
+      jenis: 'pemasukan',
+      debit: 1000,
+      kredit: 0,
+      akun_id: 1,
+      items: [{ produk_id: 7, jumlah: 1, subtotal: 1000 }],
+    },
+  });
+  const res = mkRes();
+
+  await ctrl.createLaporan(req, res);
+  expect(fm.deleteLaporan).toHaveBeenCalledWith('uuid-1');
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json.mock.calls[0][0].message).toBe('Gagal menyimpan detail barang');
+});
+
+// ============ listLaporanController ============
+test('listLaporanController: sukses', async () => {
+  fm.listLaporan.mockResolvedValue({ data: [{ id_laporan: 'A' }], error: null, count: 1 });
+
+  const req = mkReq({ query: { page: '2', limit: '5', jenis: 'pemasukan', akun_id: '3' } });
+  const res = mkRes();
+
+  await ctrl.listLaporanController(req, res);
+
+  expect(fm.listLaporan).toHaveBeenCalled();
+  expect(res.json).toHaveBeenCalledWith({
+    page: 2,
+    limit: 5,
+    total: 1,
+    data: [{ id_laporan: 'A' }],
+  });
+});
+
+// ============ getLaporanDetail ============
+test('getLaporanDetail: not found', async () => {
+  fm.getLaporanHeader.mockResolvedValue({ data: null, error: null });
+  const req = mkReq({ params: { id: 'x' } });
+  const res = mkRes();
+  await ctrl.getLaporanDetail(req, res);
+  expect(res.status).toHaveBeenCalledWith(404);
+});
+
+test('getLaporanDetail: forbidden untuk non-admin berbeda user', async () => {
+  fm.getLaporanHeader.mockResolvedValue({ data: { id_user: 'other' }, error: null });
+  const req = mkReq({ params: { id: 'x' }, user: { user_id: 'u-1', role: 'user' } });
+  const res = mkRes();
+  await ctrl.getLaporanDetail(req, res);
+  expect(res.status).toHaveBeenCalledWith(403);
+});
+
+test('getLaporanDetail: sukses + harga_satuan dihitung', async () => {
+  fm.getLaporanHeader.mockResolvedValue({ data: { id_user: 'u-1' }, error: null });
+  fm.getLaporanDetails.mockResolvedValue({
+    data: [{ jumlah: 5, subtotal: 1000 }],
+    error: null,
+  });
+  const req = mkReq({ params: { id: 'x' } });
+  const res = mkRes();
+  await ctrl.getLaporanDetail(req, res);
+  expect(res.json).toHaveBeenCalledWith({
+    header: { id_user: 'u-1' },
+    details: [{ jumlah: 5, subtotal: 1000, harga_satuan: 200 }],
+  });
+});
+
+// ============ deleteLaporanController ============
+test('deleteLaporanController: reversal saldo akun dan hapus', async () => {
+  fm.getLaporanHeader.mockResolvedValue({
+    data: { id_user: 'u-1', akun_id: 9, debit: 300, kredit: 0 },
+    error: null,
+  });
+  akm.incSaldoAkunKas.mockResolvedValue({ error: null });
+  fm.deleteLaporan.mockResolvedValue({ error: null });
+
+  const req = mkReq({ params: { id: 'x' } });
+  const res = mkRes();
+  await ctrl.deleteLaporanController(req, res);
+
+  expect(akm.incSaldoAkunKas).toHaveBeenCalledWith(9, -300); // reversal
+  expect(fm.deleteLaporan).toHaveBeenCalledWith('x');
+  expect(res.json).toHaveBeenCalledWith({ message: 'Laporan dihapus' });
+});
+
+// ============ getLabaRugi ============
+test('getLabaRugi: hitung debit-kredit berdasar jenis', async () => {
+  fm.sumProfitLoss.mockResolvedValue({
+    data: [
+      { jenis: 'pemasukan', debit: 1000 },
+      { jenis: 'pengeluaran', kredit: 400 },
+    ],
+    error: null,
+  });
+  const req = mkReq({ query: {} });
+  const res = mkRes();
+  await ctrl.getLabaRugi(req, res);
+  expect(res.json).toHaveBeenCalledWith({
+    periode: { start: null, end: null },
+    total_pemasukan: 1000,
+    total_pengeluaran: 400,
+    laba_rugi: 600,
+  });
+});
+
+// ============ getArusKas ============
+test('getArusKas: param arah invalid', async () => {
+  const req = mkReq({ query: { arah: 'x' } });
+  const res = mkRes();
+  await ctrl.getArusKas(req, res);
+  expect(res.status).toHaveBeenCalledWith(400);
+});
+
+test('getArusKas: sukses arah=masuk', async () => {
+  fm.listAruskas.mockResolvedValue({
+    data: [{ debit: 100 }, { debit: 50 }],
+    count: 2,
+    error: null,
+  });
+  const req = mkReq({ query: { arah: 'masuk', page: '1', limit: '10' } });
+  const res = mkRes();
+  await ctrl.getArusKas(req, res);
+  expect(res.json).toHaveBeenCalledWith({
+    meta: {
+      arah: 'masuk',
+      page: 1,
+      limit: 10,
+      total_rows: 2,
+      total_nilai: 150,
+    },
+    data: [{ debit: 100 }, { debit: 50 }],
+  });
+});
+
+// ============ getNeraca ============
+test('getNeraca: agregasi per range aset_lancar/aset_tetap/kewajiban', async () => {
+  // RANGES in controller:
+  // aset_lancar: 0-2599; aset_tetap: 2600-3599; kewajiban: 4000-4999
+  fm.listForNeracaByItems.mockResolvedValue({
+    data: [
+      { neraca_identifier: 10, jenis: 'pemasukan', subtotal: 300 },    // aset lancar debit
+      { neraca_identifier: 2550, jenis: 'pengeluaran', subtotal: 50 }, // aset lancar kredit
+      { neraca_identifier: 3000, jenis: 'pemasukan', subtotal: 200 },  // aset tetap debit
+      { neraca_identifier: 4100, jenis: 'pengeluaran', subtotal: 120 } // kewajiban kredit
+    ],
+    error: null,
   });
 
-  test('GET /arus-kas arah=masuk → 200 + total', async () => {
-    fm.listAruskas.mockResolvedValue({
-      data: [
-        { id_laporan: 'a', jenis: 'pemasukan', debit: 12000, kredit: 0 },
-        { id_laporan: 'b', jenis: 'pemasukan', debit: 8000, kredit: 0 },
-      ],
-      error: null,
-      count: 2,
-    });
+  const req = mkReq({ query: {} });
+  const res = mkRes();
+  await ctrl.getNeraca(req, res);
 
-    const req = { user, query: { arah: 'masuk', page: 1, limit: 10 } };
-    const res = resMock();
+  // aset_lancar saldo = 300 - 50 = 250
+  // aset_tetap saldo  = 200
+  // kewajiban saldo   = 120
+  // total_aset = 450; total_kewajiban = 120
+  expect(res.json).toHaveBeenCalledWith({
+    periode: { start: null, end: null },
+    aset_lancar: { debit: 300, kredit: 50, saldo: 250 },
+    aset_tetap:  { debit: 200, kredit: 0,  saldo: 200 },
+    kewajiban:   { debit: 0,   kredit: 120, saldo: -120 }, // debit 0, kredit 120, saldo = 0 - 120 = -120 → tapi controller isi {debit, kredit, saldo: debit-kredit}
+    total_aset: 450,
+    total_kewajiban: -120,
+    seimbang: 450 === -120,
+  });
+});
 
-    await finance.getArusKas(req, res);
+// ============ getArusKasByAkun ============
+test('getArusKasByAkun: akun_id invalid', async () => {
+  const req = mkReq({ query: { akun_id: 'abc' } });
+  const res = mkRes();
+  await ctrl.getArusKasByAkun(req, res);
+  expect(res.status).toHaveBeenCalledWith(400);
+});
 
-    expect(res.statusCode).toBe(200);
-    expect(res.body.meta.total_nilai).toBe(20000);
-    expect(Array.isArray(res.body.data)).toBe(true);
+test('getArusKasByAkun: akun tidak ditemukan', async () => {
+  akm.getAkunKasById.mockResolvedValue({ data: null, error: null });
+  const req = mkReq({ query: { akun_id: '7' } });
+  const res = mkRes();
+  await ctrl.getArusKasByAkun(req, res);
+  expect(res.status).toHaveBeenCalledWith(404);
+});
+
+test('getArusKasByAkun: forbidden non-owner non-admin beda klaster', async () => {
+  // akun milik user lain & klaster 99
+  akm.getAkunKasById.mockResolvedValue({ data: { akun_id: 7, user_id: 'someone', klaster_id: 99 }, error: null });
+  mockUserKlaster(11);
+  const req = mkReq({ query: { akun_id: '7' }, user: { user_id: 'u-1', role: 'user' } });
+  const res = mkRes();
+  await ctrl.getArusKasByAkun(req, res);
+  expect(res.status).toHaveBeenCalledWith(403);
+});
+
+test('getArusKasByAkun: sukses (owner) ambil dua arah + total', async () => {
+  akm.getAkunKasById.mockResolvedValue({ data: { akun_id: 7, user_id: 'u-1', klaster_id: null }, error: null });
+  mockUserKlaster(null);
+
+  // masuk
+  fm.listAruskas.mockImplementation(async ({ arah }) => {
+    if (arah === 'masuk') return { data: [{ debit: 100 }, { debit: 50 }], count: 2, error: null };
+    return { data: [{ kredit: 30 }], count: 1, error: null };
   });
 
-  test('GET /laba-rugi → 200, hitung benar', async () => {
-    fm.sumProfitLoss.mockResolvedValue({
-      data: [
-        { jenis: 'pemasukan', debit: 30000, kredit: 0 },
-        { jenis: 'pengeluaran', debit: 0, kredit: 12000 },
-      ],
-      error: null,
-    });
+  const req = mkReq({ query: { akun_id: '7', page: '1', limit: '10' } });
+  const res = mkRes();
+  await ctrl.getArusKasByAkun(req, res);
 
-    const req = { user, query: {} };
-    const res = resMock();
-
-    await finance.getLabaRugi(req, res);
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body.total_pemasukan).toBe(30000);
-    expect(res.body.total_pengeluaran).toBe(12000);
-    expect(res.body.laba_rugi).toBe(18000);
+  expect(res.json).toHaveBeenCalledWith({
+    meta: {
+      akun_id: 7,
+      periode: { start: null, end: null },
+      page: 1, limit: 10,
+      total_rows_masuk: 2,
+      total_rows_keluar: 1,
+      total_masuk: 150,
+      total_keluar: 30,
+      net: 120,
+    },
+    masuk: [{ debit: 100 }, { debit: 50 }],
+    keluar: [{ kredit: 30 }],
   });
 });
