@@ -25,6 +25,27 @@ export async function listProducts({ page = 1, limit = 10, search = '' }) {
   return q.range(from, to);
 }
 
+/** ✅ Baru: list produk milik user tertentu (created_by = user_id) */
+export async function listProductsByUser({ user_id, page = 1, limit = 10, search = '' }) {
+  if (!user_id) {
+    return { data: null, error: new Error('user_id wajib diisi'), count: 0 };
+  }
+
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  let q = supabase
+    .from(TABLE)
+    .select('produk_id, nama, kategori_id, created_by', { count: 'exact' })
+    .eq('created_by', user_id)
+    .order('produk_id', { ascending: true });
+
+  if (search) q = q.ilike('nama', `%${search}%`);
+
+  const { data, error, count } = await q.range(from, to);
+  return { data, error, count };
+}
+
 export async function getProductById(id) {
   return supabase
     .from(TABLE)

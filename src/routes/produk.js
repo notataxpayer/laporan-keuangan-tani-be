@@ -1,18 +1,30 @@
 // src/routes/produk.js
 import express from 'express';
 import { authRequired, roleGuard } from '../middlewares/auth.js';
-import { create, list, detail, update, remove } from '../controllers/product_controller.js';
+import { create, list, detail, update, remove, listMyProducts, listByUser } from '../controllers/product_controller.js';
 
 const router = express.Router();
 
-// READ (list/detail) → cukup login
+// Semua produk (scope otomatis: admin lihat semua, user lihat miliknya)
 router.get('/', authRequired, list);
+
+// Produk milik user yang sedang login
+router.get('/saya', authRequired, listMyProducts);
+
+// Produk milik user tertentu (param userId)
+router.get('/users/:userId/produk', authRequired, listByUser);
+
+// Detail produk
 router.get('/:id', authRequired, detail);
 
-// WRITE (create/update/delete) → admin/superadmin saja
-router.post('/', authRequired, roleGuard('admin', 'superadmin'), create);
-router.patch('/:id', authRequired, roleGuard('admin', 'superadmin'), update);
-router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
+// Tambah produk
+router.post('/', authRequired, create);
+
+// Update produk
+router.patch('/:id', authRequired, update);
+
+// Hapus produk
+router.delete('/:id', authRequired, remove);
 
 // swagger docs
 // swagger docs
