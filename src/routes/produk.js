@@ -229,4 +229,135 @@ router.delete('/:id', authRequired, remove);
  *       403: { description: Forbidden (bukan admin/superadmin) }
  *       404: { description: Tidak ditemukan }
  */
+
+/**
+ * @swagger
+ * /api/keuangan/laporan/{id}:
+ *   patch:
+ *     summary: Update laporan keuangan
+ *     description: |
+ *       Edit laporan keuangan yang sudah ada.  
+ *       - **jenis** harus `pemasukan` atau `pengeluaran`.  
+ *       - **pemasukan** → debit > 0, kredit = 0.  
+ *       - **pengeluaran** → kredit > 0, debit = 0.  
+ *       - Jika `items` dikirim, semua detail barang akan **diganti**.  
+ *       - Jika `items` tidak dikirim, detail lama dipertahankan, tapi jumlah totalnya harus konsisten dengan debit/kredit baru.
+ *       - Jika `akun_id` diganti, saldo akun lama akan dikembalikan, lalu saldo akun baru akan ditambahkan.
+ *     tags:
+ *       - Keuangan
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID laporan (UUID)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               jenis:
+ *                 type: string
+ *                 enum: [pemasukan, pengeluaran]
+ *                 example: pemasukan
+ *               deskripsi:
+ *                 type: string
+ *                 example: "Penjualan harian (revisi)"
+ *               debit:
+ *                 type: number
+ *                 example: 200000
+ *               kredit:
+ *                 type: number
+ *                 example: 0
+ *               akun_id:
+ *                 type: integer
+ *                 nullable: true
+ *                 example: 12
+ *               items:
+ *                 type: array
+ *                 description: Jika dikirim, akan mengganti seluruh detail barang.
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     produk_id:
+ *                       type: integer
+ *                       example: 101
+ *                     jumlah:
+ *                       type: integer
+ *                       example: 2
+ *                     harga_satuan:
+ *                       type: number
+ *                       example: 25000
+ *                     subtotal:
+ *                       type: number
+ *                       example: 50000
+ *     responses:
+ *       200:
+ *         description: Laporan berhasil diperbarui
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Laporan diperbarui"
+ *                 header:
+ *                   type: object
+ *                   properties:
+ *                     id_laporan:
+ *                       type: string
+ *                       example: "3f6d3c3a-1c2b-4a81-9b7f-1c8f8e2b7a11"
+ *                     id_user:
+ *                       type: string
+ *                       example: "uuid-user"
+ *                     akun_id:
+ *                       type: integer
+ *                       example: 12
+ *                     created_at:
+ *                       type: string
+ *                       format: date-time
+ *                     jenis:
+ *                       type: string
+ *                       example: "pemasukan"
+ *                     deskripsi:
+ *                       type: string
+ *                       example: "Penjualan harian (revisi)"
+ *                     debit:
+ *                       type: number
+ *                       example: 200000
+ *                     kredit:
+ *                       type: number
+ *                       example: 0
+ *                 details:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id_detail:
+ *                         type: integer
+ *                       produk_id:
+ *                         type: integer
+ *                       jumlah:
+ *                         type: integer
+ *                       subtotal:
+ *                         type: number
+ *                       harga_satuan:
+ *                         type: number
+ *       400:
+ *         description: Bad request (validasi gagal, misalnya debit/kredit tidak sesuai atau total items mismatch)
+ *       403:
+ *         description: Forbidden (bukan pemilik atau bukan admin)
+ *       404:
+ *         description: Laporan tidak ditemukan
+ *       500:
+ *         description: Internal server error
+ */
+
+
 export default router;
