@@ -8,7 +8,6 @@ import {
   deleteLaporanController,
   getLabaRugi,
   getArusKas,
-  getNeraca,
   getArusKasByAkun
 } from '../controllers/finance_controller.js';
 
@@ -20,7 +19,6 @@ router.get('/laporan/:id', authRequired, getLaporanDetail);
 router.delete('/laporan/:id', authRequired, deleteLaporanController);
 router.get('/laba-rugi', authRequired, getLabaRugi);
 router.get('/arus-kas', authRequired, getArusKas);
-router.get('/neraca', authRequired, getNeraca);
 router.get('/arus-kas/akun', authRequired, getArusKasByAkun);
 
 export default router;
@@ -333,65 +331,4 @@ export default router;
  *       401: { description: Unauthorized }
  *       403: { description: Forbidden (bukan pemilik/klaster/admin) }
  *       404: { description: Akun kas tidak ditemukan }
- */
-
-/**
- * @openapi
- * /keuangan/neraca:
- *   get:
- *     summary: Neraca sederhana (berdasarkan neraca_identifier dari detail items)
- *     description: |
- *       Mengelompokkan saldo ke:
- *       - **aset_lancar** (0–2599)  
- *       - **aset_tetap**  (2600–3599)  
- *       - **kewajiban**   (4000–4999)  
- *       Perhitungan: `saldo = debit - kredit` per kelompok.
- *     security: [ { BearerAuth: [] } ]
- *     tags: [Keuangan]
- *     parameters:
- *       - in: query
- *         name: id_user
- *         schema: { type: string, format: uuid }
- *         description: Khusus admin/superadmin; filter milik user tertentu.
- *       - in: query
- *         name: start
- *         schema: { type: string, example: '2025-08-01' }
- *       - in: query
- *         name: end
- *         schema: { type: string, example: '2025-09-01' }
- *     responses:
- *       200:
- *         description: OK
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 periode:
- *                   type: object
- *                   properties:
- *                     start: { type: string, nullable: true }
- *                     end:   { type: string, nullable: true }
- *                 aset_lancar:
- *                   type: object
- *                   properties:
- *                     debit:  { type: integer, example: 3200000 }
- *                     kredit: { type: integer, example: 500000 }
- *                     saldo:  { type: integer, example: 2700000 }
- *                 aset_tetap:
- *                   type: object
- *                   properties:
- *                     debit:  { type: integer, example: 1200000 }
- *                     kredit: { type: integer, example: 0 }
- *                     saldo:  { type: integer, example: 1200000 }
- *                 kewajiban:
- *                   type: object
- *                   properties:
- *                     debit:  { type: integer, example: 0 }
- *                     kredit: { type: integer, example: 1500000 }
- *                     saldo:  { type: integer, example: -1500000, description: "Saldo = debit - kredit; bisa negatif untuk kewajiban." }
- *                 total_aset:      { type: integer, example: 3900000 }
- *                 total_kewajiban: { type: integer, example: -1500000 }
- *                 seimbang:        { type: boolean, example: false }
- *       401: { description: Unauthorized }
  */

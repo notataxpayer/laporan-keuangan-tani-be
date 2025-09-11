@@ -271,46 +271,9 @@ export async function getArusKas(req, res) {
 const RANGES = {
   aset_lancar:  { min: 0,    max: 2599 },
   aset_tetap:   { min: 2600, max: 3599 },
-  kewajiban:    { min: 4000, max: 4999 },
+  kew_lancar:   { min: 4000, max: 4499 },
+  kew_jangka:   { min: 4500, max: 4999 },
 };
-
-export async function getNeraca(req, res) {
-  const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
-  const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
-
-  const ownerOnly = !isAdmin(req.user.role);
-  const id_user = ownerOnly ? req.user.user_id : (req.query.id_user ?? undefined);
-
-  const resp = await listForNeracaByItems({ id_user, start, end });
-  if (resp.error) return res.status(500).json({ message: 'Gagal mengambil data neraca', detail: resp.error.message });
-
-  const sumByRange = (min, max) => {
-    let debit = 0, kredit = 0;
-    for (const r of resp.data ?? []) {
-      const ni = r.neraca_identifier;
-      if (ni === null || ni === undefined) continue;
-      if (ni >= min && ni <= max) {
-        if (r.jenis === 'pemasukan') debit += r.subtotal;
-        else if (r.jenis === 'pengeluaran') kredit += r.subtotal;
-      }
-    }
-    return { debit, kredit, saldo: debit - kredit };
-  };
-
-  const asetLancar = sumByRange(RANGES.aset_lancar.min, RANGES.aset_lancar.max);
-  const asetTetap  = sumByRange(RANGES.aset_tetap.min,  RANGES.aset_tetap.max);
-  const kewajiban  = sumByRange(RANGES.kewajiban.min,   RANGES.kewajiban.max);
-
-  return res.json({
-    periode: { start: start ?? null, end: end ?? null },
-    aset_lancar: asetLancar,
-    aset_tetap: asetTetap,
-    kewajiban: kewajiban,
-    total_aset: asetLancar.saldo + asetTetap.saldo,
-    total_kewajiban: kewajiban.saldo,
-    seimbang: (asetLancar.saldo + asetTetap.saldo) === kewajiban.saldo
-  });
-}
 
 export async function getArusKasByAkun(req, res) {
   const akun_id = Number(req.query.akun_id);

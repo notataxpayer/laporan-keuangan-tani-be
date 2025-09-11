@@ -1,7 +1,7 @@
 // src/controllers/kategori.controller.js
 import supabase from '../config/supabase.js';
 import {
-  createKategoriAuto,
+  createKategoriAutoSmart,
   listKategoriVisible,
   getKategoriById,
   deleteKategoriById,
@@ -44,7 +44,7 @@ export async function create(req, res) {
   const owner_user_id = req.user.user_id;
   const owner_klaster_id = await getUserKlasterId(owner_user_id); // bisa null
 
-  const { data, error } = await createKategoriAuto({
+  const { data, error } = await createKategoriAutoSmart({
     nama,
     jenis,
     owner_user_id,

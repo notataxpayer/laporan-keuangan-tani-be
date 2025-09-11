@@ -1,16 +1,11 @@
 import supabase from '../config/supabase.js';
 
-const RANGE_BY_JENIS = {
-  aset_lancar:               { min: 0,    max: 1499 },
-  aset_tetap:                { min: 1500, max: 3599 },
+const RANGE_BY_SUB = {
+  aset_lancar:               { min: 0,    max: 2599 },
+  aset_tetap:                { min: 2600, max: 3599 },
   kewajiban_lancar:          { min: 4000, max: 4499 },
   kewajiban_jangka_panjang:  { min: 4500, max: 4999 },
 };
-// Fallback
-const FALLBACK_KEYWORDS = [
-  { target: 'aset_lancar',  kws: ['panen','stok','persediaan','hasil','piutang'] },
-  { target: 'aset_tetap',   kws: ['lahan','sawah','tanah','bangunan','alat','mesin'] },
-];
 
 async function nextScopedNeraca({ min, max, owner_klaster_id, owner_user_id }) {
   let q = supabase
@@ -52,10 +47,10 @@ export async function createKategoriAuto({
     neraca_identifier: null,
   };
 
-  if (RANGE_BY_JENIS[j]) {
+  if (RANGE_BY_SUB[j]) {
     for (let attempt = 0; attempt < 2; attempt++) {
       const { next, error: idErr } = await nextScopedNeraca({
-        ...RANGE_BY_JENIS[j],
+        ...RANGE_BY_SUB[j],
         owner_klaster_id,
         owner_user_id,
       });
@@ -132,39 +127,6 @@ export async function countLapkeuanganByKategori(kategori_id) {
     .eq('kategori_id', Number(kategori_id));
 }
 
-
-// infersub kelompok: berdasarkan nama kategori & produk, rules per-user/klaster/global, fallback keywords
-
-// V1
-// async function inferSubKelompok({ kategori_nama, produk_nama, owner_user_id, owner_klaster_id }) {
-//   const text = [kategori_nama, produk_nama].filter(Boolean).join(' ').toLowerCase();
-
-//   // 1) Coba rules dari DB (prioritas user/klaster > global)
-//   const { data: rules, error } = await supabase
-//     .from('kategori_auto_rules')
-//     .select('pattern, target_sub_kelompok, priority, user_id, klaster_id')
-//     .or(`user_id.eq.${owner_user_id},klaster_id.eq.${owner_klaster_id},and(is.null.user_id,is.null.klaster_id)`)
-//     .order('priority', { ascending: true });
-
-//   if (!error) {
-//     for (const r of rules || []) {
-//       const pat = String(r.pattern || '').replace(/%/g, '').toLowerCase();
-//       if (!pat) continue;
-//       if (text.includes(pat)) return r.target_sub_kelompok;
-//     }
-//   }
-
-//   // 2) Fallback keywords
-//   for (const group of FALLBACK_KEYWORDS) {
-//     for (const kw of group.kws) {
-//       if (text.includes(kw)) return group.target;
-//     }
-//   }
-
-//   // 3) Default aman: aset_lancar (bisa kamu ubah sesuai kebijakan)
-//   return 'aset_lancar';
-// }
-
 // V2
 async function inferSubKelompok({ kategori_nama, produk_nama, owner_user_id, owner_klaster_id }) {
   const text = [kategori_nama, produk_nama].filter(Boolean).join(' ').toLowerCase();
@@ -205,32 +167,58 @@ async function nextScopedNeracaInRange({ min, max, owner_user_id, owner_klaster_
 
 // create kategori auto
 export async function createKategoriAutoSmart({
-  nama,                 // nama kategori
-  produk_nama,          // opsional: kalau kategori dibikin saat bikin produk pertama
+  nama,
+  produk_nama,
   owner_user_id,
   owner_klaster_id,
 }) {
-  const sub = await inferSubKelompok({ kategori_nama: nama, produk_nama, owner_user_id, owner_klaster_id });
-  const range = RANGE_BY_JENIS[sub];
+  // TODO: ganti ini ke fungsi rules kamu sendiri
+  const inferred_sub = await inferSubKelompok({
+    nama,
+    produk_nama,
+    owner_user_id,
+    owner_klaster_id,
+  }); // hasil: 'aset_lancar' | 'aset_tetap' | 'kewajiban_lancar' | 'kewajiban_jangka_panjang' | null
 
-  let neraca_identifier = null;
+  const payload = {
+    nama,
+    jenis: inferred_sub && inferred_sub.startsWith('kewajiban') ? 'pengeluaran' : 'pemasukan',
+    sub_kelompok: inferred_sub ?? null,
+    user_id: owner_user_id ?? null,
+    klaster_id: owner_klaster_id ?? null,
+    neraca_identifier: null,
+  };
+
+  const range = inferred_sub ? RANGE_BY_SUB[inferred_sub] : null;
+
   if (range) {
-    const { next, error } = await nextScopedNeracaInRange({ ...range, owner_user_id, owner_klaster_id });
-    if (error) return { data: null, error };
-    neraca_identifier = next;
+    // assign berdasarkan SUB-KEL
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { next, error } = await nextScopedNeracaByRange({
+        ...range,
+        owner_klaster_id,
+        owner_user_id,
+      });
+      if (error) return { data: null, error };
+
+      const ins = await supabase
+        .from('kategorial')
+        .insert([{ ...payload, neraca_identifier: next }])
+        .select('kategori_id, nama, jenis, sub_kelompok, klaster_id, user_id, neraca_identifier')
+        .single();
+
+      if (!ins.error) return ins;
+      if ((ins.error.message || '').toLowerCase().includes('duplicate')) continue; // race
+      return ins;
+    }
+    return { data: null, error: { message: 'Gagal menetapkan neraca_identifier (race)' } };
   }
 
+  // fallback kalau rules tidak menentukan sub_kelompok
   return supabase
     .from('kategorial')
-    .insert([{
-      nama,
-      jenis: 'produk',                  // tetap boleh 'produk' supaya backward compatible
-      user_id: owner_user_id ?? null,
-      klaster_id: owner_klaster_id ?? null,
-      sub_kelompok: sub,                // <— inilah kuncinya
-      neraca_identifier,                // ditaruh sesuai subgroup range
-    }])
-    .select('kategori_id, nama, jenis, klaster_id, user_id, sub_kelompok, neraca_identifier')
+    .insert([payload])
+    .select('kategori_id, nama, jenis, sub_kelompok, klaster_id, user_id, neraca_identifier')
     .single();
 }
 
@@ -269,12 +257,33 @@ function guessByFallback(text) {
   const t = text.toLowerCase();
   const FALLBACK = [
     { sub: 'aset_lancar', kws: ['panen','stok','persediaan','hasil','piutang','kas','bank','uang','pupuk','bibit','benih','obat'] },
-    { sub: 'aset_tetap',  kws: ['lahan','sawah','tanah','bangunan','kendaraan','traktor','mesin','peralatan besar','gudang','kandang','sumur','irigasi'] },
-    { sub: 'kewajiban_lancar', kws: ['utang dagang','hutang dagang','pinjaman','kredit bank','biaya','gaji','listrik','air','pajak'] },
+    { sub: 'aset_tetap',  kws: ['lahan','sawah','tanah','bangunan','kendaraan','mesin','peralatan besar','gudang','kandang','sumur','irigasi'] },
+    { sub: 'kewajiban_lancar', kws: ['utang dagang','hutang dagang','pinjaman','kredit','kredit bank','biaya','gaji','listrik','air','pajak'] },
     { sub: 'kewajiban_jangka_panjang', kws: ['utang bank','hutang bank','utang investasi','hutang modal','sewa jangka panjang','leasing','cicilan'] },
   ];
   for (const g of FALLBACK) {
     if (g.kws.some(kw => t.includes(kw))) return g.sub;
   }
   return 'aset_lancar';
+}
+
+// changes
+async function nextScopedNeracaByRange({ min, max, owner_klaster_id, owner_user_id }) {
+  let q = supabase
+    .from('kategorial')
+    .select('neraca_identifier')
+    .gte('neraca_identifier', min)
+    .lte('neraca_identifier', max)
+    .order('neraca_identifier', { ascending: false })
+    .limit(1);
+
+  if (owner_klaster_id) q = q.eq('klaster_id', owner_klaster_id);
+  else                  q = q.is('klaster_id', null).eq('user_id', owner_user_id);
+
+  const { data, error } = await q;
+  if (error) return { error };
+  const currentMax = data?.[0]?.neraca_identifier ?? null;
+  const next = currentMax == null ? min : currentMax + 1;
+  if (next > max) return { error: { message: `Range ${min}-${max} penuh untuk scope ini` } };
+  return { next };
 }
