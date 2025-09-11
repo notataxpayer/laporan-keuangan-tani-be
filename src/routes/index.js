@@ -7,6 +7,7 @@ import kategoriRoutes from './kategori.js';
 import akunKasRoutes from './akun_kas.js';
 import inviteRoutes from './invite.js';
 import neracaRoutes from './neraca.js';
+import klasterRoutes from './klaster.js';
 const router = express.Router();
 
 
@@ -17,5 +18,6 @@ router.use('/kategori', kategoriRoutes);
 router.use('/akun-kas', akunKasRoutes);
 router.use('/invite', inviteRoutes);
 router.use('/neraca', neracaRoutes);
+router.use('/klaster', klasterRoutes);
 
 export default router;
