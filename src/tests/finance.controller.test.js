@@ -1,5 +1,6 @@
 // src/controllers/finance_controller.test.js
 import { jest } from '@jest/globals';
+import { updateLaporan } from '../models/finance_model.js';
 
 // ==== Mock crypto.randomUUID agar deterministik ====
 jest.unstable_mockModule('crypto', () => ({
@@ -52,6 +53,9 @@ jest.unstable_mockModule('../models/finance_model.js', () => ({
   listAruskas:           fns.listAruskas,
   listForNeracaByItems:  fns.listForNeracaByItems,
   listForNeracaExpanded: fns.listForNeracaExpanded,
+  deleteDetailsByLaporan: fns.deleteDetailsByLaporan,
+  replaceDetailBarang:    fns.replaceDetailBarang,
+  updateLaporan: fns.updateLaporan
 }));
 
 // ==== Mock models/akun_kas_model.js ====

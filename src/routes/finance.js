@@ -8,7 +8,8 @@ import {
   deleteLaporanController,
   getLabaRugi,
   getArusKas,
-  getArusKasByAkun
+  getArusKasByAkun,
+  updateLaporanController
 } from '../controllers/finance_controller.js';
 
 const router = express.Router();
@@ -20,6 +21,7 @@ router.delete('/laporan/:id', authRequired, deleteLaporanController);
 router.get('/laba-rugi', authRequired, getLabaRugi);
 router.get('/arus-kas', authRequired, getArusKas);
 router.get('/arus-kas/akun', authRequired, getArusKasByAkun);
+router.patch('/laporan/:id', authRequired, updateLaporanController); // TODO: update laporan
 
 export default router;
 

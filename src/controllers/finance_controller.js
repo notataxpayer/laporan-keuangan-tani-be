@@ -12,7 +12,10 @@ import {
   sumProfitLoss,
   listAruskas,
   listForNeracaByItems,
-  listForNeracaExpanded
+  listForNeracaExpanded,
+  updateLaporan,
+  replaceDetailBarang,
+  deleteDetailsByLaporan,
 } from '../models/finance_model.js';
 import { getAkunKasById, incSaldoAkunKas } from '../models/akun_kas_model.js';
 import { buildNeracaNested } from '../config/neraca_builder.js';
@@ -332,4 +335,220 @@ export async function getArusKasByAkun(req, res) {
     masuk:  masukRes.data  ?? [],
     keluar: keluarRes.data ?? []
   });
+}
+
+
+export async function updateLaporanController(req, res) {
+  try {
+    const id_laporan = String(req.params.id);
+    const body = req.body || {};
+
+    // 1) Ambil header & detail lama
+    const oldHeaderRes = await getLaporanHeader(id_laporan);
+    if (oldHeaderRes.error || !oldHeaderRes.data) {
+      return res.status(404).json({ message: 'Laporan tidak ditemukan' });
+    }
+    const oldHeader = oldHeaderRes.data;
+
+    // Otorisasi
+    if (!isAdmin(req.user.role) && oldHeader.id_user !== req.user.user_id) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
+    const oldDetailsRes = await getLaporanDetails(id_laporan);
+    if (oldDetailsRes.error) {
+      return res.status(500).json({ message: 'Gagal ambil detail lama', detail: oldDetailsRes.error.message });
+    }
+    const oldDetails = oldDetailsRes.data ?? [];
+
+    // 2) Siapkan nilai baru (dengan default ke nilai lama jika tidak dikirim)
+    const newJenis = body.jenis ? normalizeJenis(body.jenis) : oldHeader.jenis;
+    if (!['pemasukan', 'pengeluaran'].includes(newJenis)) {
+      return res.status(400).json({ message: 'jenis harus "pengeluaran" atau "pemasukan"' });
+    }
+
+    // Jika user ingin eksplisit mengosongkan akun → kirim akun_id = null
+    const akunFieldSupplied = Object.prototype.hasOwnProperty.call(body, 'akun_id');
+    const candidateAkunId = akunFieldSupplied ? (body.akun_id ?? null) : oldHeader.akun_id;
+
+    const d = body.debit  !== undefined ? Number(body.debit)  : Number(oldHeader.debit || 0);
+    const k = body.kredit !== undefined ? Number(body.kredit) : Number(oldHeader.kredit || 0);
+    if (d < 0 || k < 0) return res.status(400).json({ message: 'debit/kredit tidak boleh negatif' });
+    if (newJenis === 'pemasukan' && !(d > 0 && k === 0)) {
+      return res.status(400).json({ message: 'untuk pemasukan: isi debit > 0 dan kredit = 0' });
+    }
+    if (newJenis === 'pengeluaran' && !(k > 0 && d === 0)) {
+      return res.status(400).json({ message: 'untuk pengeluaran: isi kredit > 0 dan debit = 0' });
+    }
+
+    // 3) Validasi akun baru (jika diubah / diisi)
+    let newAkun = null;
+    if (candidateAkunId !== null && candidateAkunId !== undefined) {
+      const { data: ak, error: aerr } = await getAkunKasById(Number(candidateAkunId));
+      if (aerr || !ak) return res.status(400).json({ message: 'akun_id tidak ditemukan' });
+
+      const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
+      const admin = isAdmin(req.user.role);
+      const owner = ak.user_id && ak.user_id === req.user.user_id;
+      const sameCluster = ak.klaster_id && me?.klaster_id && ak.klaster_id === me.klaster_id;
+      if (!admin && !owner && !sameCluster) {
+        return res.status(403).json({ message: 'Forbidden: akun kas bukan milikmu/klastermu' });
+      }
+      newAkun = ak;
+    }
+
+    // 4) Validasi & normalisasi items (jika dikirim) atau cek konsistensi detail lama
+    let normalizedItems = null; // null = tidak mengganti detail
+    if (Array.isArray(body.items)) {
+      normalizedItems = [];
+      if (body.items.length === 0) {
+        // Mengosongkan detail diizinkan hanya bila debit/kredit = 0, tapi kita sudah pastikan by jenis > 0
+        return res.status(400).json({ message: 'items tidak boleh kosong; hapus laporan saja jika ingin menghapus semua item' });
+      }
+
+      for (const it of body.items) {
+        const pid = Number(it?.produk_id);
+        const jumlah = Number(it?.jumlah);
+        const hargaSatuan = it?.harga_satuan !== undefined ? Number(it.harga_satuan) : undefined;
+        const subtotalIn = it?.subtotal !== undefined ? Number(it.subtotal) : undefined;
+
+        if (Number.isNaN(pid) || pid <= 0) return res.status(400).json({ message: 'produk_id harus valid' });
+        if (Number.isNaN(jumlah) || jumlah <= 0) return res.status(400).json({ message: 'jumlah harus angka > 0' });
+
+        const { data: prod, error: pErr } = await getProdukById(pid);
+        if (pErr || !prod) return res.status(400).json({ message: `produk_id ${pid} tidak ditemukan` });
+
+        let subtotal;
+        if (hargaSatuan !== undefined) {
+          if (Number.isNaN(hargaSatuan) || hargaSatuan <= 0) return res.status(400).json({ message: 'harga_satuan harus angka > 0' });
+          subtotal = hargaSatuan * jumlah;
+        } else if (subtotalIn !== undefined) {
+          if (Number.isNaN(subtotalIn) || subtotalIn <= 0) return res.status(400).json({ message: 'subtotal harus angka > 0' });
+          subtotal = subtotalIn;
+        } else {
+          return res.status(400).json({ message: 'setiap item wajib punya harga_satuan atau subtotal' });
+        }
+
+        normalizedItems.push({ produk_id: pid, jumlah, subtotal });
+      }
+
+      const totalItems = normalizedItems.reduce((a, b) => a + b.subtotal, 0);
+      if (newJenis === 'pemasukan' && totalItems !== d) {
+        return res.status(400).json({ message: `total subtotal items (${totalItems}) harus sama dengan debit (${d})` });
+      }
+      if (newJenis === 'pengeluaran' && totalItems !== k) {
+        return res.status(400).json({ message: `total subtotal items (${totalItems}) harus sama dengan kredit (${k})` });
+      }
+    } else {
+      // Items tidak dikirim → pastikan total detail lama masih konsisten dengan debit/kredit baru
+      const totalOldItems = (oldDetails ?? []).reduce((acc, it) => acc + Number(it.subtotal || 0), 0);
+      if (newJenis === 'pemasukan' && totalOldItems !== d) {
+        return res.status(400).json({ message: `items tidak dikirim, namun total detail lama (${totalOldItems}) tidak sama dengan debit baru (${d}). Sertakan items untuk menyesuaikan.` });
+      }
+      if (newJenis === 'pengeluaran' && totalOldItems !== k) {
+        return res.status(400).json({ message: `items tidak dikirim, namun total detail lama (${totalOldItems}) tidak sama dengan kredit baru (${k}). Sertakan items untuk menyesuaikan.` });
+      }
+    }
+
+    // 5) Hitung delta saldo lama vs baru
+    const oldDelta = Number(oldHeader.debit || 0) - Number(oldHeader.kredit || 0);
+    const newDelta = d - k;
+    const oldAkunId = oldHeader.akun_id ?? null;
+    const newAkunId = (candidateAkunId === undefined) ? oldAkunId : (candidateAkunId ?? null);
+
+    // 6) Update header dulu
+    const patch = {
+      jenis: newJenis,
+      deskripsi: body.deskripsi !== undefined ? (body.deskripsi ?? null) : oldHeader.deskripsi,
+      debit: d,
+      kredit: k,
+      akun_id: newAkunId,
+    };
+    const updRes = await updateLaporan({ id_laporan, patch });
+    if (updRes.error) {
+      return res.status(500).json({ message: 'Gagal update header', detail: updRes.error.message });
+    }
+
+    // 7) Replace detail bila items dikirim
+    if (normalizedItems) {
+      const rep = await replaceDetailBarang(id_laporan, normalizedItems);
+      if (rep.error) {
+        // Coba rollback header ke nilai lama
+        await updateLaporan({
+          id_laporan,
+          patch: {
+            jenis: oldHeader.jenis,
+            deskripsi: oldHeader.deskripsi,
+            debit: oldHeader.debit,
+            kredit: oldHeader.kredit,
+            akun_id: oldHeader.akun_id,
+          }
+        });
+        return res.status(500).json({ message: 'Gagal update detail', detail: rep.error.message });
+      }
+    }
+
+    // 8) Sinkron saldo_akhir akun kas
+    async function applySaldoChanges() {
+      if (oldAkunId === newAkunId) {
+        // Akun sama → cukup perubahan diferensial
+        if (newAkunId) {
+          const diff = newDelta - oldDelta;
+          if (diff !== 0) {
+            const r = await incSaldoAkunKas(newAkunId, diff);
+            if (r.error) throw new Error(r.error.message);
+          }
+        }
+      } else {
+        // Akun berubah
+        if (oldAkunId) {
+          const r1 = await incSaldoAkunKas(oldAkunId, -oldDelta); // reversal
+          if (r1.error) throw new Error(r1.error.message);
+        }
+        if (newAkunId) {
+          const r2 = await incSaldoAkunKas(newAkunId, newDelta);
+          if (r2.error) throw new Error(r2.error.message);
+        }
+      }
+    }
+
+    try {
+      await applySaldoChanges();
+    } catch (saldoErr) {
+      // Rollback minimal: kembalikan header & detail lama
+      await updateLaporan({
+        id_laporan,
+        patch: {
+          jenis: oldHeader.jenis,
+          deskripsi: oldHeader.deskripsi,
+          debit: oldHeader.debit,
+          kredit: oldHeader.kredit,
+          akun_id: oldHeader.akun_id,
+        }
+      });
+      if (normalizedItems) {
+        // Kembalikan detail lama
+        const oldItems = (oldDetails ?? []).map(it => ({
+          produk_id: it.produk_id,
+          jumlah: it.jumlah,
+          subtotal: it.subtotal,
+        }));
+        await replaceDetailBarang(id_laporan, oldItems);
+      }
+      return res.status(500).json({ message: 'Gagal sinkron saldo akun', detail: String(saldoErr?.message || saldoErr) });
+    }
+
+    // 9) Ambil data terkini untuk response
+    const newHeaderRes = await getLaporanHeader(id_laporan);
+    const newDetailsRes = await getLaporanDetails(id_laporan);
+    const header = newHeaderRes.data;
+    const details = (newDetailsRes.data ?? []).map(it => ({
+      ...it,
+      harga_satuan: it.jumlah ? Math.floor(it.subtotal / it.jumlah) : null,
+    }));
+
+    return res.json({ message: 'Laporan diperbarui', header, details });
+  } catch (e) {
+    return res.status(500).json({ message: 'Internal error', detail: e.message });
+  }
 }

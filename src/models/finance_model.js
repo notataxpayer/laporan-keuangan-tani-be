@@ -255,3 +255,36 @@ export async function listForNeracaExpanded({ id_user, start, end }) {
 
   return { data: expanded, error: null };
 }
+
+
+export async function updateLaporan({ id_laporan, patch }) {
+  return supabase
+    .from('lapkeuangan')
+    .update({
+      // batasi field yang boleh diubah
+      jenis: patch.jenis,
+      deskripsi: patch.deskripsi ?? null,
+      debit: Number(patch.debit || 0),
+      kredit: Number(patch.kredit || 0),
+      akun_id: patch.akun_id ?? null,
+    })
+    .eq('id_laporan', id_laporan)
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit')
+    .single();
+}
+
+// NEW: hapus semua detail by laporan
+export async function deleteDetailsByLaporan(laporan_id) {
+  return supabase
+    .from('detaillaporanbarang')
+    .delete()
+    .eq('laporan_id', laporan_id);
+}
+
+// NEW: replace (delete + insert) detail barang
+export async function replaceDetailBarang(laporan_id, items) {
+  const del = await deleteDetailsByLaporan(laporan_id);
+  if (del.error) return del;
+  if (!items || !items.length) return { data: [], error: null };
+  return insertDetailBarang(laporan_id, items);
+}
