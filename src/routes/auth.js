@@ -1,3 +1,4 @@
+// src/routes/auth.js
 import express from 'express';
 import { randomUUID } from 'crypto';
 import supabase from '../config/supabase.js';
@@ -6,6 +7,9 @@ import { signToken, authRequired } from '../middlewares/auth.js';
 
 const router = express.Router();
 
+/**
+ * REGISTER
+ */
 router.post('/register', async (req, res) => {
   const { nama, email, nomor_telepon, password, role = 'user', klaster_id = null } = req.body || {};
 
@@ -13,48 +17,49 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ message: 'email & password wajib diisi' });
   }
 
-  // Cek email
-const { data: existingemail, error: errCheckemail } = await supabase
-  .from('User')
-  .select('user_id')
-  .eq('email', email)
-  .maybeSingle();
+  // Cek email (dupe check #1)
+  const { data: existingemail, error: errCheckemail } = await supabase
+    .from('User')
+    .select('user_id')
+    .eq('email', email)
+    .maybeSingle();
 
-if (errCheckemail) {
-  return res.status(500).json({ message: 'Gagal cek email', detail: errCheckemail.message });
-}
-if (existingemail) {
-  return res.status(409).json({ message: 'email sudah digunakan' });
-}
+  if (errCheckemail) {
+    return res.status(500).json({ message: 'Gagal cek email', detail: errCheckemail.message });
+  }
+  if (existingemail) {
+    return res.status(409).json({ message: 'email sudah digunakan' });
+  }
 
-// Cek email
-const { data: existingEmail, error: errCheckEmail } = await supabase
-  .from('User')
-  .select('user_id')
-  .eq('email', email)
-  .maybeSingle();
+  // Cek email (dupe check #2 – tetap dipertahankan sesuai kode awalmu)
+  const { data: existingEmail, error: errCheckEmail } = await supabase
+    .from('User')
+    .select('user_id')
+    .eq('email', email)
+    .maybeSingle();
 
-if (errCheckEmail) {
-  return res.status(500).json({ message: 'Gagal cek email', detail: errCheckEmail.message });
-}
-if (existingEmail) {
-  return res.status(409).json({ message: 'Email sudah digunakan' });
-}
+  if (errCheckEmail) {
+    return res.status(500).json({ message: 'Gagal cek email', detail: errCheckEmail.message });
+  }
+  if (existingEmail) {
+    return res.status(409).json({ message: 'Email sudah digunakan' });
+  }
 
-// Cek nomor telepon
-const { data: existingPhone, error: errCheckPhone } = await supabase
-  .from('User')
-  .select('user_id')
-  .eq('nomor_telepon', nomor_telepon)
-  .maybeSingle();
+  // Cek nomor telepon
+  if (nomor_telepon) {
+    const { data: existingPhone, error: errCheckPhone } = await supabase
+      .from('User')
+      .select('user_id')
+      .eq('nomor_telepon', nomor_telepon)
+      .maybeSingle();
 
-if (errCheckPhone) {
-  return res.status(500).json({ message: 'Gagal cek nomor telepon', detail: errCheckPhone.message });
-}
-if (existingPhone) {
-  return res.status(409).json({ message: 'Nomor telepon sudah digunakan' });
-}
-
+    if (errCheckPhone) {
+      return res.status(500).json({ message: 'Gagal cek nomor telepon', detail: errCheckPhone.message });
+    }
+    if (existingPhone) {
+      return res.status(409).json({ message: 'Nomor telepon sudah digunakan' });
+    }
+  }
 
   const hashed = await hashPassword(password);
   const user_id = randomUUID();
@@ -75,7 +80,7 @@ if (existingPhone) {
 
 /**
  * LOGIN
- * body: { email, password }
+ * body: { identifier (email atau no. telepon), password }
  */
 router.post('/login', async (req, res) => {
   const { identifier, password } = req.body || {};
@@ -83,10 +88,8 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ message: 'Email/No. Telepon & password wajib diisi' });
   }
 
-  // Deteksi input apakah email atau nomor telepon
   const isEmail = identifier.includes('@');
 
-  // Query ke Supabase
   const { data: user, error } = await supabase
     .from('User')
     .select('user_id, nama, email, password, nomor_telepon, role, klaster_id, created_at')
@@ -102,7 +105,6 @@ router.post('/login', async (req, res) => {
     return res.status(401).json({ message: 'Email/Nomor Telepon atau password salah' });
   }
 
-  // Generate token
   const token = signToken({
     user_id: user.user_id,
     nomor_telepon: user.nomor_telepon,
@@ -116,7 +118,6 @@ router.post('/login', async (req, res) => {
   return res.json({ token, user });
 });
 
-
 /**
  * ME (cek profil dari token)
  * header: Authorization: Bearer <token>
@@ -124,7 +125,7 @@ router.post('/login', async (req, res) => {
 router.get('/me', authRequired, async (req, res) => {
   const { data: user, error } = await supabase
     .from('User')
-    .select('user_id, nama, email, role, klaster_id, created_at')
+    .select('user_id, nama, email, role, klaster_id, created_at, nomor_telepon')
     .eq('user_id', req.user.user_id)
     .single();
 
@@ -133,6 +134,136 @@ router.get('/me', authRequired, async (req, res) => {
   }
   return res.json({ user });
 });
+
+/**
+ * UPDATE PROFIL SAYA
+ * PATCH /auth/me
+ * body (opsional): { nama, email, nomor_telepon }
+ * - Non-admin tidak bisa ubah role/klaster di sini.
+ * - Email & nomor_telepon dicek unik (kecuali milik diri sendiri).
+ * - Jika email berubah, token baru akan diterbitkan.
+ */
+router.patch('/me', authRequired, async (req, res) => {
+  try {
+    const { nama, email, nomor_telepon } = req.body || {};
+    const payload = {};
+
+    if (nama !== undefined) {
+      const trimmed = String(nama).trim();
+      if (!trimmed) return res.status(400).json({ message: 'nama tidak boleh kosong' });
+      payload.nama = trimmed;
+    }
+
+    if (email !== undefined) {
+      const trimmed = String(email).trim();
+      if (!trimmed) return res.status(400).json({ message: 'email tidak boleh kosong' });
+      // cek unik email bukan milik sendiri
+      const { data: dupeEmail, error: e1 } = await supabase
+        .from('User')
+        .select('user_id')
+        .eq('email', trimmed)
+        .neq('user_id', req.user.user_id)
+        .maybeSingle();
+      if (e1) return res.status(500).json({ message: 'Gagal cek email', detail: e1.message });
+      if (dupeEmail) return res.status(409).json({ message: 'Email sudah digunakan' });
+      payload.email = trimmed;
+    }
+
+    if (nomor_telepon !== undefined) {
+      const trimmed = String(nomor_telepon).trim();
+      if (!trimmed) return res.status(400).json({ message: 'nomor_telepon tidak boleh kosong' });
+      // cek unik nomor_telepon bukan milik sendiri
+      const { data: dupePhone, error: e2 } = await supabase
+        .from('User')
+        .select('user_id')
+        .eq('nomor_telepon', trimmed)
+        .neq('user_id', req.user.user_id)
+        .maybeSingle();
+      if (e2) return res.status(500).json({ message: 'Gagal cek nomor telepon', detail: e2.message });
+      if (dupePhone) return res.status(409).json({ message: 'Nomor telepon sudah digunakan' });
+      payload.nomor_telepon = trimmed;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      return res.status(400).json({ message: 'Tidak ada field yang diupdate' });
+    }
+
+    const { data: updated, error: updErr } = await supabase
+      .from('User')
+      .update(payload)
+      .eq('user_id', req.user.user_id)
+      .select('user_id, nama, email, nomor_telepon, role, klaster_id, created_at')
+      .single();
+
+    if (updErr) {
+      return res.status(500).json({ message: 'Gagal mengupdate profil', detail: updErr.message });
+    }
+
+    // re-issue token jika email berubah (atau sekalian selalu re-issue agar konsisten)
+    const token = signToken({
+      user_id: updated.user_id,
+      email: updated.email,
+      nomor_telepon: updated.nomor_telepon,
+      role: updated.role,
+      klaster_id: updated.klaster_id,
+    });
+
+    return res.json({ message: 'Profil diperbarui', token, user: updated });
+  } catch (e) {
+    return res.status(500).json({ message: 'Internal error', detail: String(e?.message || e) });
+  }
+});
+
+/**
+ * GANTI PASSWORD
+ * PATCH /auth/me/password
+ * body: { old_password, new_password }
+ */
+router.patch('/me/password', authRequired, async (req, res) => {
+  try {
+    const { old_password, new_password } = (req.body || {});
+
+    if (!old_password || !new_password) {
+      return res.status(400).json({ message: 'old_password dan new_password wajib diisi' });
+    }
+    if (String(new_password).length < 8) {
+      return res.status(400).json({ message: 'new_password minimal 8 karakter' });
+    }
+
+    // ambil password hash lama
+    const { data: user, error: selErr } = await supabase
+      .from('User')
+      .select('user_id, password')
+      .eq('user_id', req.user.user_id)
+      .single();
+
+    if (selErr || !user) {
+      return res.status(404).json({ message: 'User tidak ditemukan' });
+    }
+
+    const ok = await comparePassword(String(old_password), String(user.password));
+    if (!ok) {
+      return res.status(401).json({ message: 'Password lama salah' });
+    }
+
+    const hashed = await hashPassword(String(new_password));
+
+    const { error: updErr } = await supabase
+      .from('User')
+      .update({ password: hashed })
+      .eq('user_id', req.user.user_id);
+
+    if (updErr) {
+      return res.status(500).json({ message: 'Gagal mengganti password', detail: updErr.message });
+    }
+
+    return res.json({ message: 'Password berhasil diganti' });
+  } catch (e) {
+    return res.status(500).json({ message: 'Internal error', detail: String(e?.message || e) });
+  }
+});
+
+export default router;
 
 // Swagger docs
 /**
@@ -322,6 +453,3 @@ router.get('/me', authRequired, async (req, res) => {
  *         description: User tidak ditemukan
  */
 
-
-
-export default router;
