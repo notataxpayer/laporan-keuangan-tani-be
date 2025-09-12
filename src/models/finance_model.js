@@ -14,7 +14,7 @@ export async function getProdukById(produk_id) {
 // --- LAPORAN ---
 
 export async function insertLaporan({
-  id_laporan, id_user, akun_id, jenis, deskripsi, debit, kredit,
+  id_laporan, id_user, akun_id, jenis, deskripsi, debit, kredit, tanggal
 }) {
   return supabase
     .from('lapkeuangan')
@@ -26,8 +26,9 @@ export async function insertLaporan({
       deskripsi: deskripsi ?? null,
       debit: Number(debit || 0),
       kredit: Number(kredit || 0),
+      tanggal: tanggal ?? null,
     }])
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit,tanggal')
     .single();
 }
 
@@ -46,7 +47,7 @@ export async function insertDetailBarang(laporan_id, items) {
 export async function getLaporanHeader(id_laporan) {
   return supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit,tanggal')
     .eq('id_laporan', id_laporan)
     .single();
 }
@@ -74,6 +75,7 @@ export async function listLaporan({
   if (akun_id) q = q.eq('akun_id', Number(akun_id));
   if (start) q = q.gte('created_at', start);
   if (end) q = q.lt('created_at', end);
+  if (tanggal) q = q.eq('tanggal', tanggal);
 
   return q.range(from, to);
 }
@@ -96,7 +98,7 @@ export async function deleteLaporan(id_laporan) {
 export async function sumProfitLoss({ id_user, start, end }) {
   let q = supabase
     .from('lapkeuangan')
-    .select('debit, kredit, jenis, created_at');
+    .select('debit, kredit, jenis, created_at, tanggal');
 
   if (id_user) q = q.eq('id_user', id_user);
   if (start) q = q.gte('created_at', start);
@@ -114,7 +116,7 @@ export async function listAruskas({
 
   let q = supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit', { count: 'exact' })
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit, tanggal', { count: 'exact' })
     .order('created_at', { ascending: false });
 
   if (id_user) q = q.eq('id_user', id_user);
@@ -267,9 +269,10 @@ export async function updateLaporan({ id_laporan, patch }) {
       debit: Number(patch.debit || 0),
       kredit: Number(patch.kredit || 0),
       akun_id: patch.akun_id ?? null,
+      tanggal: patch.tanggal ?? null,
     })
     .eq('id_laporan', id_laporan)
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit, tanggal')
     .single();
 }
 

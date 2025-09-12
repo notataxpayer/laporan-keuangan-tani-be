@@ -33,7 +33,7 @@ function normalizeJenis(value) { return String(value || '').trim().toLowerCase()
  */
 export async function createLaporan(req, res) {
   try {
-    const { jenis, deskripsi, debit, kredit, items, akun_id } = req.body || {};
+    const { jenis, deskripsi, debit, kredit, items, akun_id, tanggal } = req.body || {};
 
     const vJenis = normalizeJenis(jenis);
     if (!['pengeluaran', 'pemasukan'].includes(vJenis)) {
@@ -112,6 +112,7 @@ export async function createLaporan(req, res) {
       deskripsi,
       debit: d,
       kredit: k,
+      tanggal: tanggal !== undefined ? String(tanggal) : null,
     });
     if (hErr) return res.status(500).json({ message: 'Gagal membuat laporan', detail: hErr.message });
 
@@ -463,6 +464,7 @@ export async function updateLaporanController(req, res) {
       debit: d,
       kredit: k,
       akun_id: newAkunId,
+      tanggal: body.tanggal !== undefined ? (body.tanggal === null ? null : String(body.tanggal)) : oldHeader.tanggal,
     };
     const updRes = await updateLaporan({ id_laporan, patch });
     if (updRes.error) {
