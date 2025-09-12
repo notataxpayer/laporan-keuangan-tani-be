@@ -123,17 +123,35 @@ router.post('/login', async (req, res) => {
  * header: Authorization: Bearer <token>
  */
 router.get('/me', authRequired, async (req, res) => {
-  const { data: user, error } = await supabase
+  const { data, error } = await supabase
     .from('User')
-    .select('user_id, nama, email, role, klaster_id, created_at, nomor_telepon')
+    .select(`
+      user_id,
+      nama,
+      email,
+      role,
+      klaster_id,
+      created_at,
+      nomor_telepon,
+      klaster:klaster_id ( klaster_id, nama_klaster )
+    `)
     .eq('user_id', req.user.user_id)
     .single();
 
-  if (error || !user) {
+  if (error || !data) {
     return res.status(404).json({ message: 'User tidak ditemukan' });
   }
+
+  // flatten nama_klaster
+  const user = {
+    ...data,
+    nama_klaster: data.klaster?.nama_klaster ?? null,
+  };
+  delete user.klaster;
+
   return res.json({ user });
 });
+
 
 /**
  * UPDATE PROFIL SAYA
