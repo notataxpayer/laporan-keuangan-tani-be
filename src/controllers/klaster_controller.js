@@ -8,6 +8,7 @@ import {
   deleteCluster,
   setUserCluster,
   getUsersInCluster,
+  kickUserFromCluster
 } from '../models/klaster_model.js';
 
 function isAdmin(role) {
@@ -25,20 +26,15 @@ export async function create(req, res) {
     return res.status(400).json({ message: 'nama_klaster wajib diisi' });
   }
 
-  // Opsional: 1 user cuma boleh 1 klaster → jika admin sudah punya klaster, tolak
-  if (req.user.klaster_id) {
-    return res.status(409).json({ message: 'Kamu sudah tergabung di klaster lain' });
-  }
-
   const { data: kl, error } = await createCluster({ nama_klaster });
   if (error) return res.status(500).json({ message: 'Gagal membuat klaster', detail: error.message });
 
   // jadikan pembuat sebagai anggota klaster (owner/admin—di skema ini kita set klaster_id user)
-  const up = await setUserCluster(req.user.user_id, kl.klaster_id);
-  if (up.error) {
-    // rollback jika perlu
-    return res.status(500).json({ message: 'Gagal mengaitkan user dengan klaster', detail: up.error.message });
-  }
+  // const up = await setUserCluster(req.user.user_id, kl.klaster_id);
+  // if (up.error) {
+  //   // rollback jika perlu
+  //   return res.status(500).json({ message: 'Gagal mengaitkan user dengan klaster', detail: up.error.message });
+  // }
 
   return res.status(201).json({ message: 'Klaster dibuat', data: kl });
 }
@@ -46,9 +42,9 @@ export async function create(req, res) {
 // GET /api/klaster (admin/superadmin bisa lihat semua; user biasa boleh lihat punyaknya sendiri via /me)
 export async function list(req, res) {
   if (!isAdmin(req.user.role)) {
-    // untuk user biasa, kembalikan hanya klasternya (atau kosong jika belum punya)
-    if (!req.user.klaster_id) return res.json({ page: 1, limit: 1, total: 0, data: [] });
-    const one = await getClusterById(req.user.klaster_id);
+   const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
+   if (!me?.klaster_id) return res.json({ page: 1, limit: 1, total: 0, data: [] });
+   const one = await getClusterById(me.klaster_id);
     if (one.error || !one.data) return res.json({ page: 1, limit: 1, total: 0, data: [] });
     return res.json({ page: 1, limit: 1, total: 1, data: [one.data] });
   }
@@ -128,7 +124,6 @@ export async function remove(req, res) {
   if (Number.isNaN(id)) return res.status(400).json({ message: 'Param id tidak valid' });
 
   // kosongkan klaster user
-  const reset = await setUserCluster(null, null) // dummy supaya TS senang; kita update via eq klaster_id
   // lakukan dengan query eksplisit:
   const resetAll = await supabase
     .from('User')
@@ -140,4 +135,36 @@ export async function remove(req, res) {
   if (del.error) return res.status(500).json({ message: 'Gagal hapus klaster', detail: del.error.message });
 
   return res.json({ message: 'Klaster dihapus' });
+}
+
+// Kick user
+// DELETE /api/klaster/:id/members/:userId  (admin/superadmin only)
+export async function kickMember(req, res) {
+  if (!isAdmin(req.user.role)) {
+    return res.status(403).json({ message: 'Forbidden' });
+  }
+
+  const klasterId = Number(req.params.id);
+  const userId = String(req.params.userId || '').trim();
+
+  if (Number.isNaN(klasterId) || !userId) {
+    return res.status(400).json({ message: 'Param id / userId tidak valid' });
+  }
+
+  // Pastikan klaster ada
+  const { data: kl, error: kErr } = await getClusterById(klasterId);
+  if (kErr) return res.status(500).json({ message: 'Gagal cek klaster', detail: kErr.message });
+  if (!kl)  return res.status(404).json({ message: 'Klaster tidak ditemukan' });
+
+  // Eksekusi kick: hanya sukses jika user memang anggota klaster ini
+  const { data, error } = await kickUserFromCluster({ klaster_id: klasterId, user_id: userId });
+  if (error) {
+    // bila .single() gagal karena 0 row, berarti user bukan anggota klaster tsb
+    if (String(error.message || '').toLowerCase().includes('0 rows')) {
+      return res.status(404).json({ message: 'User bukan anggota klaster ini' });
+    }
+    return res.status(500).json({ message: 'Gagal mengeluarkan user', detail: error.message });
+  }
+
+  return res.json({ message: 'User dikeluarkan dari klaster', user_id: data.user_id, klaster_id: klasterId });
 }

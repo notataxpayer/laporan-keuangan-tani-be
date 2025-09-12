@@ -2,7 +2,7 @@
 import express from 'express';
 import { authRequired, roleGuard } from '../middlewares/auth.js';
 import {
-  create, list, myCluster, detail, update, remove,
+  create, list, myCluster, detail, update, remove, kickMember
 } from '../controllers/klaster_controller.js';
 
 const router = express.Router();
@@ -20,6 +20,9 @@ router.get('/',           authRequired, list);
 
 // detail klaster: admin bebas; user biasa hanya klasternya sendiri
 router.get('/:id',        authRequired, detail);
+
+// Kick Member
+router.delete('/:id/members/:userId', authRequired, roleGuard('admin','superadmin'), kickMember);
 
 export default router;
 

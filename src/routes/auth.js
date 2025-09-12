@@ -145,19 +145,21 @@ router.get('/me', authRequired, async (req, res) => {
  */
 router.patch('/me', authRequired, async (req, res) => {
   try {
-    const { nama, email, nomor_telepon } = req.body || {};
+    const { nama, email, nomor_telepon, klaster_id } = req.body || {};
     const payload = {};
 
+    // --- nama ---
     if (nama !== undefined) {
       const trimmed = String(nama).trim();
       if (!trimmed) return res.status(400).json({ message: 'nama tidak boleh kosong' });
       payload.nama = trimmed;
     }
 
+    // --- email (unik, bukan milik sendiri) ---
     if (email !== undefined) {
       const trimmed = String(email).trim();
       if (!trimmed) return res.status(400).json({ message: 'email tidak boleh kosong' });
-      // cek unik email bukan milik sendiri
+
       const { data: dupeEmail, error: e1 } = await supabase
         .from('User')
         .select('user_id')
@@ -166,13 +168,15 @@ router.patch('/me', authRequired, async (req, res) => {
         .maybeSingle();
       if (e1) return res.status(500).json({ message: 'Gagal cek email', detail: e1.message });
       if (dupeEmail) return res.status(409).json({ message: 'Email sudah digunakan' });
+
       payload.email = trimmed;
     }
 
+    // --- nomor_telepon (unik, bukan milik sendiri) ---
     if (nomor_telepon !== undefined) {
       const trimmed = String(nomor_telepon).trim();
       if (!trimmed) return res.status(400).json({ message: 'nomor_telepon tidak boleh kosong' });
-      // cek unik nomor_telepon bukan milik sendiri
+
       const { data: dupePhone, error: e2 } = await supabase
         .from('User')
         .select('user_id')
@@ -181,7 +185,34 @@ router.patch('/me', authRequired, async (req, res) => {
         .maybeSingle();
       if (e2) return res.status(500).json({ message: 'Gagal cek nomor telepon', detail: e2.message });
       if (dupePhone) return res.status(409).json({ message: 'Nomor telepon sudah digunakan' });
+
       payload.nomor_telepon = trimmed;
+    }
+
+    // --- klaster_id (hanya admin/superadmin) ---
+    if (klaster_id !== undefined) {
+      const isAdm = ['admin', 'superadmin'].includes(String(req.user?.role || '').toLowerCase());
+      if (!isAdm) {
+        return res.status(403).json({ message: 'Forbidden: kamu tidak boleh mengubah klaster' });
+      }
+
+      const target = klaster_id === null ? null : Number(klaster_id);
+      if (target !== null && Number.isNaN(target)) {
+        return res.status(400).json({ message: 'klaster_id harus angka atau null' });
+      }
+
+      if (target !== null) {
+        const { data: kl, error: kErr } = await supabase
+          .from('klaster')
+          .select('klaster_id')
+          .eq('klaster_id', target)
+          .maybeSingle();
+
+        if (kErr) return res.status(500).json({ message: 'Gagal cek klaster', detail: kErr.message });
+        if (!kl) return res.status(404).json({ message: 'Klaster tidak ditemukan' });
+      }
+
+      payload.klaster_id = target;
     }
 
     if (Object.keys(payload).length === 0) {
@@ -199,7 +230,7 @@ router.patch('/me', authRequired, async (req, res) => {
       return res.status(500).json({ message: 'Gagal mengupdate profil', detail: updErr.message });
     }
 
-    // re-issue token jika email berubah (atau sekalian selalu re-issue agar konsisten)
+    // re-issue token agar klaster_id/email/telepon terbaru ikut
     const token = signToken({
       user_id: updated.user_id,
       email: updated.email,
@@ -213,6 +244,7 @@ router.patch('/me', authRequired, async (req, res) => {
     return res.status(500).json({ message: 'Internal error', detail: String(e?.message || e) });
   }
 });
+
 
 /**
  * GANTI PASSWORD

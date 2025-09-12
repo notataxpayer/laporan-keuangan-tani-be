@@ -67,3 +67,13 @@ export async function getUsersInCluster(klaster_id) {
     .eq('klaster_id', Number(klaster_id))
     .order('created_at', { ascending: true });
 }
+
+export async function kickUserFromCluster({ klaster_id, user_id }) {
+  return supabase
+    .from('User')
+    .update({ klaster_id: null })
+    .eq('user_id', user_id)
+    .eq('klaster_id', Number(klaster_id))
+    .select('user_id')      // agar tahu apakah ada row yang berubah
+    .single();              // akan error bila 0 row terubah (bukan anggota klaster tsb)
+}
