@@ -7,6 +7,7 @@ import {
   deleteKategoriById,
   countProdukByKategori,
   countLapkeuanganByKategori,
+  listKategoriByScope
 } from '../models/kategori_model.js';
 
 const ALLOWED = ['pengeluaran', 'pemasukan', 'produk', 'pasar'];
@@ -109,4 +110,39 @@ export async function remove(req, res) {
   if (delErr) return res.status(500).json({ message: 'Gagal hapus kategori', detail: delErr.message });
 
   return res.json({ message: 'Kategori dihapus' });
+}
+
+export async function listByScope(req, res) {
+  const page   = Math.max(1, Number(req.query.page ?? 1));
+  const limit  = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+  const search = String(req.query.search ?? '').trim();
+  const jenis  = req.query.jenis ? String(req.query.jenis).toLowerCase() : undefined;
+
+  const owner_user_id     = req.query.user_id     ? String(req.query.user_id)     : undefined;
+  const owner_klaster_id  = req.query.klaster_id  ? String(req.query.klaster_id)  : undefined;
+
+  if (!owner_user_id && !owner_klaster_id) {
+    return res.status(400).json({ message: 'Wajib kirim user_id atau klaster_id' });
+  }
+
+  // Authorization: non-admin hanya boleh minta scope miliknya sendiri
+  const admin = ['admin','superadmin'].includes(String(req.user?.role || '').toLowerCase());
+  if (!admin) {
+    const myUid = req.user.user_id;
+    const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', myUid).single();
+
+    if (owner_user_id && owner_user_id !== myUid) {
+      return res.status(403).json({ message: 'Forbidden: user_id bukan milikmu' });
+    }
+    if (owner_klaster_id && (!me?.klaster_id || String(me.klaster_id) !== owner_klaster_id)) {
+      return res.status(403).json({ message: 'Forbidden: klaster_id bukan klastermu' });
+    }
+  }
+
+  const { data, error, count } = await listKategoriByScope({
+    owner_user_id, owner_klaster_id, jenis, search, page, limit,
+  });
+  if (error) return res.status(500).json({ message: 'Gagal mengambil kategori', detail: error.message });
+
+  return res.json({ page, limit, total: count ?? data?.length ?? 0, data });
 }

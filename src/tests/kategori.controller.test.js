@@ -38,6 +38,7 @@ jest.unstable_mockModule('../models/kategori_model.js', () => ({
   deleteKategoriById: modelFns.deleteKategoriById,
   countProdukByKategori: modelFns.countProdukByKategori,
   countLapkeuanganByKategori: modelFns.countLapkeuanganByKategori,
+  listKategoriByScope: modelFns.listKategoriByScope,
 }));
 
 // Setelah mock siap, baru import controller-nya

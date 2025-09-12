@@ -287,3 +287,32 @@ async function nextScopedNeracaByRange({ min, max, owner_klaster_id, owner_user_
   if (next > max) return { error: { message: `Range ${min}-${max} penuh untuk scope ini` } };
   return { next };
 }
+
+export async function listKategoriByScope({
+  owner_user_id, owner_klaster_id, jenis, search, page = 1, limit = 20,
+}) {
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  let q = supabase
+    .from('kategorial')
+    .select('kategori_id, nama, jenis, sub_kelompok, klaster_id, user_id, neraca_identifier', { count: 'exact' })
+    .order('kategori_id', { ascending: true });
+
+  if (jenis)  q = q.eq('jenis', jenis);
+  if (search) q = q.ilike('nama', `%${search}%`);
+
+  // Filter scope:
+  if (owner_klaster_id && owner_user_id) {
+    // union: milik klaster ATAU milik user (pribadi)
+    q = q.or(`klaster_id.eq.${owner_klaster_id},and(is.null.klaster_id,user_id.eq.${owner_user_id})`);
+  } else if (owner_klaster_id) {
+    q = q.eq('klaster_id', owner_klaster_id);
+  } else if (owner_user_id) {
+    q = q.is('klaster_id', null).eq('user_id', owner_user_id);
+  } else {
+    return { data: [], error: null, count: 0 };
+  }
+
+  return q.range(from, to);
+}

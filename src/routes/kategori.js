@@ -1,13 +1,14 @@
 // src/routes/kategori.js
 import express from 'express';
 import { authRequired, roleGuard } from '../middlewares/auth.js';
-import { create, list, remove } from '../controllers/kategori_controller.js';
+import { create, list, remove, listByScope } from '../controllers/kategori_controller.js';
 
 const router = express.Router();
 
 router.get('/', authRequired, list);
 router.post('/', authRequired, create);
 router.delete('/:id', authRequired, roleGuard('admin', 'superadmin'), remove);
+router.get('/scope', authRequired, listByScope);
 
 // ----- Swagger -----
 // ----- Swagger -----
