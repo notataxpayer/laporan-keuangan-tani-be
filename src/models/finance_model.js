@@ -60,14 +60,14 @@ export async function getLaporanDetails(id_laporan) {
 }
 
 export async function listLaporan({
-  id_user, start, end, jenis, akun_id, page = 1, limit = 10,
+  id_user, start, end, jenis, akun_id, page = 1, limit = 10, tanggal,
 }) {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
   let q = supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit', { count: 'exact' })
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit ,tanggal', { count: 'exact' })
     .order('created_at', { ascending: false });
 
   if (id_user) q = q.eq('id_user', id_user);
@@ -75,6 +75,7 @@ export async function listLaporan({
   if (akun_id) q = q.eq('akun_id', Number(akun_id));
   if (start) q = q.gte('created_at', start);
   if (end) q = q.lt('created_at', end);
+  if (tanggal) q = q.eq('tanggal', tanggal);
 
   return q.range(from, to);
 }

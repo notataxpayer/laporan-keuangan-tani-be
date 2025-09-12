@@ -148,18 +148,20 @@ export async function listLaporanController(req, res) {
   const jenis = req.query.jenis ? normalizeJenis(req.query.jenis) : undefined;
   const akun_id = req.query.akun_id ? Number(req.query.akun_id) : undefined;
   const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
-  const end = req.query.end ? new Date(req.query.end).toISOString() : undefined;
+  const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
+  const tanggal = req.query.tanggal ? String(req.query.tanggal) : undefined; // ⬅️ NEW
 
   const ownerOnly = !isAdmin(req.user.role);
   const id_user = ownerOnly ? req.user.user_id : (req.query.id_user ?? undefined);
 
   const { data, error, count } = await listLaporan({
-    id_user, start, end, jenis, akun_id, page, limit,
+    id_user, start, end, jenis, akun_id, page, limit, tanggal // ⬅️ NEW
   });
 
   if (error) return res.status(500).json({ message: 'Gagal mengambil laporan', detail: error.message });
   return res.json({ page, limit, total: count ?? data?.length ?? 0, data });
 }
+
 
 /** GET /api/keuangan/laporan/:id */
 export async function getLaporanDetail(req, res) {
