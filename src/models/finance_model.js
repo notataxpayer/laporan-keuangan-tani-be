@@ -75,7 +75,6 @@ export async function listLaporan({
   if (akun_id) q = q.eq('akun_id', Number(akun_id));
   if (start) q = q.gte('created_at', start);
   if (end) q = q.lt('created_at', end);
-  if (tanggal) q = q.eq('tanggal', tanggal);
 
   return q.range(from, to);
 }
