@@ -1,7 +1,7 @@
 // src/routes/akun_kas.js
 import express from 'express';
 import { authRequired } from '../middlewares/auth.js';
-import { create, list, remove } from '../controllers/akun_kas_controller.js';
+import { create, list, remove, update } from '../controllers/akun_kas_controller.js';
 
 const router = express.Router();
 
@@ -15,6 +15,10 @@ router.get('/', authRequired, list);
 
 // DELETE akun kas by id (owner/klaster/admin)
 router.delete('/:id', authRequired, remove);
+
+// Patch
+router.patch('/:id', authRequired, update);
+
 
 export default router;
 

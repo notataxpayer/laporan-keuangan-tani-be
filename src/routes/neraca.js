@@ -9,9 +9,14 @@ import {
 
 const router = express.Router();
 
-router.get('/summary', authRequired, getNeracaSummary);
+router.get('/summary/:userId', authRequired, getNeracaSummary);
 router.get('/details', authRequired, getNeracaDetails);
 router.get('/by-produk', authRequired, getNeracaByProduk);
+
+// NEW: by cluster
+router.get('/summary/cluster/:klasterId',   authRequired, getNeracaSummary);
+router.get('/details/cluster/:klasterId',   authRequired, getNeracaDetails);
+router.get('/by-produk/cluster/:klasterId', authRequired, getNeracaByProduk);
 
 export default router;
 

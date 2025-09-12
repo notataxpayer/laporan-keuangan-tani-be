@@ -33,7 +33,7 @@ function normalizeJenis(value) { return String(value || '').trim().toLowerCase()
  */
 export async function createLaporan(req, res) {
   try {
-    const { jenis, deskripsi, debit, kredit, items, akun_id, tanggal } = req.body || {};
+    const { jenis, deskripsi, debit, kredit, items, akun_id, tanggal, share_to_klaster, klaster_id } = req.body || {};
 
     const vJenis = normalizeJenis(jenis);
     if (!['pengeluaran', 'pemasukan'].includes(vJenis)) {
@@ -50,17 +50,53 @@ export async function createLaporan(req, res) {
       return res.status(400).json({ message: 'untuk pengeluaran: isi kredit > 0 dan debit = 0' });
     }
 
+    // Ambil info user (klaster) sekali
+    const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
+
+    // Tentukan klaster yang akan disimpan
+    let klasterIdToSet = null;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'share_to_klaster')) {
+      if (share_to_klaster) {
+        if (!me?.klaster_id) return res.status(400).json({ message: 'User tidak memiliki klaster' });
+        klasterIdToSet = me.klaster_id;
+      } else {
+        klasterIdToSet = null;
+      }
+    } else if (Object.prototype.hasOwnProperty.call(req.body, 'klaster_id')) {
+      const candidate = req.body.klaster_id === null ? null : Number(req.body.klaster_id);
+      if (candidate !== null && Number.isNaN(candidate)) {
+        return res.status(400).json({ message: 'klaster_id harus angka atau null' });
+      }
+      if (!isAdmin(req.user.role)) {
+        if (!me?.klaster_id || candidate !== me.klaster_id) {
+          return res.status(403).json({ message: 'Forbidden: klaster_id bukan milik klastermu' });
+        }
+      }
+      klasterIdToSet = candidate;
+    }
+    // Kalau tidak ada field share_to_klaster/klaster_id, default = null (tidak dishare)
+
     // Validasi akun (opsional)
     let akun = null;
     if (akun_id !== undefined && akun_id !== null) {
       const { data: ak, error: aerr } = await getAkunKasById(akun_id);
       if (aerr || !ak) return res.status(400).json({ message: 'akun_id tidak ditemukan' });
-      const { data: u } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
+
       const isOwner = ak.user_id && ak.user_id === req.user.user_id;
-      const sameCluster = ak.klaster_id && u?.klaster_id && ak.klaster_id === u.klaster_id;
+      const sameCluster = ak.klaster_id && me?.klaster_id && ak.klaster_id === me.klaster_id;
       if (!isAdmin(req.user.role) && !isOwner && !sameCluster) {
         return res.status(403).json({ message: 'Forbidden: akun kas bukan milikmu/klastermu' });
       }
+
+      // Konsistensi klaster laporan vs akun (jika keduanya punya klaster)
+      if (klasterIdToSet != null && ak.klaster_id != null && ak.klaster_id !== klasterIdToSet) {
+        return res.status(400).json({ message: 'klaster_id laporan harus sama dengan klaster akun_kas' });
+      }
+      // Jika user share ke klaster tapi akun punya klaster, boleh turunkan dari akun
+      if (klasterIdToSet == null && ak.klaster_id != null) {
+        klasterIdToSet = ak.klaster_id; // opsional: otomatis ikut akun
+      }
+
       akun = ak;
     }
 
@@ -113,6 +149,7 @@ export async function createLaporan(req, res) {
       debit: d,
       kredit: k,
       tanggal: tanggal !== undefined ? String(tanggal) : null,
+      klaster_id: klasterIdToSet, // NEW
     });
     if (hErr) return res.status(500).json({ message: 'Gagal membuat laporan', detail: hErr.message });
 
@@ -149,18 +186,33 @@ export async function listLaporanController(req, res) {
   const akun_id = req.query.akun_id ? Number(req.query.akun_id) : undefined;
   const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
   const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
-  const tanggal = req.query.tanggal ? String(req.query.tanggal) : undefined; // ⬅️ NEW
+  const tanggal = req.query.tanggal ? String(req.query.tanggal) : undefined;
+  const scope = String(req.query.scope || 'mine'); // 'mine' | 'cluster'
 
-  const ownerOnly = !isAdmin(req.user.role);
-  const id_user = ownerOnly ? req.user.user_id : (req.query.id_user ?? undefined);
+  let id_user = undefined;
+  let klaster_id = undefined;
+
+  if (isAdmin(req.user.role)) {
+    id_user = req.query.id_user ?? undefined;
+    klaster_id = req.query.klaster_id ? Number(req.query.klaster_id) : undefined;
+  } else {
+    if (scope === 'cluster') {
+      const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
+      klaster_id = me?.klaster_id ?? undefined;
+      if (!klaster_id) return res.status(400).json({ message: 'Kamu tidak punya klaster' });
+    } else {
+      id_user = req.user.user_id;
+    }
+  }
 
   const { data, error, count } = await listLaporan({
-    id_user, start, end, jenis, akun_id, page, limit, tanggal // ⬅️ NEW
+    id_user, klaster_id, start, end, jenis, akun_id, page, limit, tanggal
   });
 
   if (error) return res.status(500).json({ message: 'Gagal mengambil laporan', detail: error.message });
   return res.json({ page, limit, total: count ?? data?.length ?? 0, data });
 }
+
 
 
 /** GET /api/keuangan/laporan/:id */
@@ -171,8 +223,13 @@ export async function getLaporanDetail(req, res) {
   if (headerRes.error || !headerRes.data) return res.status(404).json({ message: 'Laporan tidak ditemukan' });
 
   const header = headerRes.data;
-  if (!isAdmin(req.user.role) && header.id_user !== req.user.user_id) {
-    return res.status(403).json({ message: 'Forbidden' });
+  if (!isAdmin(req.user.role)) {
+    if (header.id_user !== req.user.user_id) {
+      // cek klaster jika laporan di-share
+      const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
+      const sameCluster = header.klaster_id && me?.klaster_id && header.klaster_id === me.klaster_id;
+      if (!sameCluster) return res.status(403).json({ message: 'Forbidden' });
+    }
   }
 
   const detailsRes = await getLaporanDetails(id_laporan);
@@ -185,6 +242,7 @@ export async function getLaporanDetail(req, res) {
 
   return res.json({ header, details });
 }
+
 
 /** DELETE /api/keuangan/laporan/:id */
 export async function deleteLaporanController(req, res) {
@@ -353,7 +411,7 @@ export async function updateLaporanController(req, res) {
     }
     const oldHeader = oldHeaderRes.data;
 
-    // Otorisasi
+    // Otorisasi: hanya admin atau pemilik yang boleh edit
     if (!isAdmin(req.user.role) && oldHeader.id_user !== req.user.user_id) {
       return res.status(403).json({ message: 'Forbidden' });
     }
@@ -364,7 +422,14 @@ export async function updateLaporanController(req, res) {
     }
     const oldDetails = oldDetailsRes.data ?? [];
 
-    // 2) Siapkan nilai baru (dengan default ke nilai lama jika tidak dikirim)
+    // Ambil info user (untuk cek klaster)
+    const { data: me } = await supabase
+      .from('User')
+      .select('klaster_id')
+      .eq('user_id', req.user.user_id)
+      .single();
+
+    // 2) Siapkan nilai baru (default ke nilai lama jika tidak dikirim)
     const newJenis = body.jenis ? normalizeJenis(body.jenis) : oldHeader.jenis;
     if (!['pemasukan', 'pengeluaran'].includes(newJenis)) {
       return res.status(400).json({ message: 'jenis harus "pengeluaran" atau "pemasukan"' });
@@ -390,7 +455,6 @@ export async function updateLaporanController(req, res) {
       const { data: ak, error: aerr } = await getAkunKasById(Number(candidateAkunId));
       if (aerr || !ak) return res.status(400).json({ message: 'akun_id tidak ditemukan' });
 
-      const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
       const admin = isAdmin(req.user.role);
       const owner = ak.user_id && ak.user_id === req.user.user_id;
       const sameCluster = ak.klaster_id && me?.klaster_id && ak.klaster_id === me.klaster_id;
@@ -400,12 +464,38 @@ export async function updateLaporanController(req, res) {
       newAkun = ak;
     }
 
-    // 4) Validasi & normalisasi items (jika dikirim) atau cek konsistensi detail lama
+    // 4) Tentukan klaster (share / unshare)
+    let newKlasterId = (Object.prototype.hasOwnProperty.call(oldHeader, 'klaster_id') ? oldHeader.klaster_id : null);
+    if (Object.prototype.hasOwnProperty.call(body, 'share_to_klaster')) {
+      if (body.share_to_klaster) {
+        if (!me?.klaster_id) return res.status(400).json({ message: 'User tidak memiliki klaster' });
+        newKlasterId = me.klaster_id;
+      } else {
+        newKlasterId = null;
+      }
+    } else if (Object.prototype.hasOwnProperty.call(body, 'klaster_id')) {
+      const candidate = body.klaster_id === null ? null : Number(body.klaster_id);
+      if (candidate !== null && Number.isNaN(candidate)) {
+        return res.status(400).json({ message: 'klaster_id harus angka atau null' });
+      }
+      if (!isAdmin(req.user.role)) {
+        if (!me?.klaster_id || candidate !== me.klaster_id) {
+          return res.status(403).json({ message: 'Forbidden: klaster_id bukan milik klastermu' });
+        }
+      }
+      newKlasterId = candidate;
+    }
+
+    // Konsistensi klaster laporan vs akun_kas (jika dua-duanya punya klaster)
+    if (newAkun && newAkun.klaster_id != null && newKlasterId != null && newAkun.klaster_id !== newKlasterId) {
+      return res.status(400).json({ message: 'klaster_id laporan harus sama dengan klaster akun_kas' });
+    }
+
+    // 5) Validasi & normalisasi items (jika dikirim) atau cek konsistensi detail lama
     let normalizedItems = null; // null = tidak mengganti detail
     if (Array.isArray(body.items)) {
       normalizedItems = [];
       if (body.items.length === 0) {
-        // Mengosongkan detail diizinkan hanya bila debit/kredit = 0, tapi kita sudah pastikan by jenis > 0
         return res.status(400).json({ message: 'items tidak boleh kosong; hapus laporan saja jika ingin menghapus semua item' });
       }
 
@@ -443,7 +533,6 @@ export async function updateLaporanController(req, res) {
         return res.status(400).json({ message: `total subtotal items (${totalItems}) harus sama dengan kredit (${k})` });
       }
     } else {
-      // Items tidak dikirim → pastikan total detail lama masih konsisten dengan debit/kredit baru
       const totalOldItems = (oldDetails ?? []).reduce((acc, it) => acc + Number(it.subtotal || 0), 0);
       if (newJenis === 'pemasukan' && totalOldItems !== d) {
         return res.status(400).json({ message: `items tidak dikirim, namun total detail lama (${totalOldItems}) tidak sama dengan debit baru (${d}). Sertakan items untuk menyesuaikan.` });
@@ -453,13 +542,13 @@ export async function updateLaporanController(req, res) {
       }
     }
 
-    // 5) Hitung delta saldo lama vs baru
+    // 6) Hitung delta saldo lama vs baru
     const oldDelta = Number(oldHeader.debit || 0) - Number(oldHeader.kredit || 0);
     const newDelta = d - k;
     const oldAkunId = oldHeader.akun_id ?? null;
     const newAkunId = (candidateAkunId === undefined) ? oldAkunId : (candidateAkunId ?? null);
 
-    // 6) Update header dulu
+    // 7) Update header dulu
     const patch = {
       jenis: newJenis,
       deskripsi: body.deskripsi !== undefined ? (body.deskripsi ?? null) : oldHeader.deskripsi,
@@ -467,17 +556,18 @@ export async function updateLaporanController(req, res) {
       kredit: k,
       akun_id: newAkunId,
       tanggal: body.tanggal !== undefined ? (body.tanggal === null ? null : String(body.tanggal)) : oldHeader.tanggal,
+      klaster_id: newKlasterId, // ← NEW
     };
     const updRes = await updateLaporan({ id_laporan, patch });
     if (updRes.error) {
       return res.status(500).json({ message: 'Gagal update header', detail: updRes.error.message });
     }
 
-    // 7) Replace detail bila items dikirim
+    // 8) Replace detail bila items dikirim
     if (normalizedItems) {
       const rep = await replaceDetailBarang(id_laporan, normalizedItems);
       if (rep.error) {
-        // Coba rollback header ke nilai lama
+        // Rollback header ke nilai lama
         await updateLaporan({
           id_laporan,
           patch: {
@@ -486,16 +576,17 @@ export async function updateLaporanController(req, res) {
             debit: oldHeader.debit,
             kredit: oldHeader.kredit,
             akun_id: oldHeader.akun_id,
+            tanggal: oldHeader.tanggal ?? null,
+            klaster_id: (Object.prototype.hasOwnProperty.call(oldHeader, 'klaster_id') ? oldHeader.klaster_id : null),
           }
         });
         return res.status(500).json({ message: 'Gagal update detail', detail: rep.error.message });
       }
     }
 
-    // 8) Sinkron saldo_akhir akun kas
+    // 9) Sinkron saldo_akhir akun kas
     async function applySaldoChanges() {
       if (oldAkunId === newAkunId) {
-        // Akun sama → cukup perubahan diferensial
         if (newAkunId) {
           const diff = newDelta - oldDelta;
           if (diff !== 0) {
@@ -504,7 +595,6 @@ export async function updateLaporanController(req, res) {
           }
         }
       } else {
-        // Akun berubah
         if (oldAkunId) {
           const r1 = await incSaldoAkunKas(oldAkunId, -oldDelta); // reversal
           if (r1.error) throw new Error(r1.error.message);
@@ -528,10 +618,11 @@ export async function updateLaporanController(req, res) {
           debit: oldHeader.debit,
           kredit: oldHeader.kredit,
           akun_id: oldHeader.akun_id,
+          tanggal: oldHeader.tanggal ?? null,
+          klaster_id: (Object.prototype.hasOwnProperty.call(oldHeader, 'klaster_id') ? oldHeader.klaster_id : null),
         }
       });
       if (normalizedItems) {
-        // Kembalikan detail lama
         const oldItems = (oldDetails ?? []).map(it => ({
           produk_id: it.produk_id,
           jumlah: it.jumlah,
@@ -542,7 +633,7 @@ export async function updateLaporanController(req, res) {
       return res.status(500).json({ message: 'Gagal sinkron saldo akun', detail: String(saldoErr?.message || saldoErr) });
     }
 
-    // 9) Ambil data terkini untuk response
+    // 10) Ambil data terkini untuk response
     const newHeaderRes = await getLaporanHeader(id_laporan);
     const newDetailsRes = await getLaporanDetails(id_laporan);
     const header = newHeaderRes.data;
@@ -556,3 +647,4 @@ export async function updateLaporanController(req, res) {
     return res.status(500).json({ message: 'Internal error', detail: e.message });
   }
 }
+

@@ -69,7 +69,7 @@ if (existingPhone) {
     return res.status(500).json({ message: 'Gagal membuat user', detail: error.message });
   }
 
-  const token = signToken({ user_id, email, role });
+  const token = signToken({ user_id, email, role, klaster_id });
   return res.status(201).json({ token, user: data });
 });
 
@@ -107,7 +107,8 @@ router.post('/login', async (req, res) => {
     user_id: user.user_id,
     nomor_telepon: user.nomor_telepon,
     email: user.email,
-    role: user.role
+    role: user.role,
+    klaster_id: user.klaster_id
   });
 
   delete user.password;

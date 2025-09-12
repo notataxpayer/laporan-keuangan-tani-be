@@ -73,3 +73,13 @@ export async function incSaldoAkunKas(akun_id, delta) {
     .select('akun_id, saldo_akhir')
     .single();
 }
+
+// UPDATE akun kas by id
+export async function updateAkunKasById(akun_id, payload) {
+  return supabase
+    .from('akun_kas')
+    .update(payload)
+    .eq('akun_id', Number(akun_id))
+    .select('akun_id, nama, deskripsi, saldo_awal, saldo_akhir, user_id, klaster_id')
+    .single();
+}

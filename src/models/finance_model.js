@@ -14,7 +14,7 @@ export async function getProdukById(produk_id) {
 // --- LAPORAN ---
 
 export async function insertLaporan({
-  id_laporan, id_user, akun_id, jenis, deskripsi, debit, kredit, tanggal
+  id_laporan, id_user, akun_id, jenis, deskripsi, debit, kredit, tanggal, klaster_id // NEW
 }) {
   return supabase
     .from('lapkeuangan')
@@ -22,15 +22,17 @@ export async function insertLaporan({
       id_laporan,
       id_user,
       akun_id: akun_id ?? null,
-      jenis,                // 'pengeluaran' | 'pemasukan'
+      jenis,
       deskripsi: deskripsi ?? null,
       debit: Number(debit || 0),
       kredit: Number(kredit || 0),
       tanggal: tanggal ?? null,
+      klaster_id: klaster_id ?? null, // NEW
     }])
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit,tanggal')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit, tanggal, klaster_id') // NEW
     .single();
 }
+
 
 export async function insertDetailBarang(laporan_id, items) {
   // items: [{ produk_id, jumlah, subtotal }]
@@ -47,7 +49,7 @@ export async function insertDetailBarang(laporan_id, items) {
 export async function getLaporanHeader(id_laporan) {
   return supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit,tanggal')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit, tanggal, klaster_id') // NEW
     .eq('id_laporan', id_laporan)
     .single();
 }
@@ -60,22 +62,23 @@ export async function getLaporanDetails(id_laporan) {
 }
 
 export async function listLaporan({
-  id_user, start, end, jenis, akun_id, page = 1, limit = 10, tanggal,
+  id_user, klaster_id, start, end, jenis, akun_id, page = 1, limit = 10, tanggal,
 }) {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
   let q = supabase
     .from('lapkeuangan')
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit ,tanggal', { count: 'exact' })
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit, tanggal, klaster_id', { count: 'exact' }) // NEW
     .order('created_at', { ascending: false });
 
-  if (id_user) q = q.eq('id_user', id_user);
-  if (jenis) q = q.eq('jenis', jenis);
-  if (akun_id) q = q.eq('akun_id', Number(akun_id));
-  if (start) q = q.gte('created_at', start);
-  if (end) q = q.lt('created_at', end);
-  if (tanggal) q = q.eq('tanggal', tanggal);
+  if (id_user)     q = q.eq('id_user', id_user);
+  if (klaster_id)  q = q.eq('klaster_id', Number(klaster_id)); // NEW
+  if (jenis)       q = q.eq('jenis', jenis);
+  if (akun_id)     q = q.eq('akun_id', Number(akun_id));
+  if (start)       q = q.gte('created_at', start);
+  if (end)         q = q.lt('created_at', end);
+  if (tanggal)     q = q.eq('tanggal', tanggal);
 
   return q.range(from, to);
 }
@@ -263,16 +266,16 @@ export async function updateLaporan({ id_laporan, patch }) {
   return supabase
     .from('lapkeuangan')
     .update({
-      // batasi field yang boleh diubah
       jenis: patch.jenis,
       deskripsi: patch.deskripsi ?? null,
       debit: Number(patch.debit || 0),
       kredit: Number(patch.kredit || 0),
       akun_id: patch.akun_id ?? null,
       tanggal: patch.tanggal ?? null,
+      klaster_id: patch.klaster_id ?? null, // NEW
     })
     .eq('id_laporan', id_laporan)
-    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit, tanggal')
+    .select('id_laporan, id_user, akun_id, created_at, jenis, deskripsi, debit, kredit, tanggal, klaster_id') // NEW
     .single();
 }
 

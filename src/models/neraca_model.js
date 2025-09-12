@@ -1,20 +1,52 @@
 // src/models/neraca_model.js
 import supabase from '../config/supabase.js';
 
-// Ambil baris detail+header+produk+kategori (2–3 langkah biar aman dari join quirks)
-export async function fetchNeracaExpanded({ id_user, start, end }) {
-  // 1) detail + header (jenis, created_at) + produk_id
-  let q1 = supabase
+export async function fetchNeracaExpanded({ id_user, klaster_id, start, end }) {
+  // --- Tentukan set user yang jadi target ---
+  let userIds = [];
+
+  if (klaster_id) {
+    // Ambil semua user di klaster
+    const ur = await supabase
+      .from('User')
+      .select('user_id')
+      .eq('klaster_id', klaster_id);
+    if (ur.error) return ur;
+    userIds = (ur.data ?? []).map(u => u.user_id);
+    if (!userIds.length) return { data: [], error: null };
+  } else if (id_user) {
+    userIds = [id_user];
+  } else {
+    // Fallback aman: tidak ada target → kosong
+    return { data: [], error: null };
+  }
+
+  // 0) Ambil header laporan milik user-user target + periode
+  let hq = supabase
+    .from('lapkeuangan')
+    .select('id_laporan, id_user, jenis, created_at')
+    .in('id_user', userIds);
+
+  if (start) hq = hq.gte('created_at', start);
+  if (end)   hq = hq.lt('created_at', end);
+
+  const hdr = await hq;
+  if (hdr.error) return hdr;
+
+  const headers = hdr.data ?? [];
+  if (!headers.length) return { data: [], error: null };
+
+  const headerMap = new Map(headers.map(h => [h.id_laporan, { jenis: h.jenis, created_at: h.created_at }]));
+  const laporanIds = headers.map(h => h.id_laporan);
+
+  // 1) detail untuk id laporan itu saja
+  const d1 = await supabase
     .from('detaillaporanbarang')
-    .select('subtotal, laporan:laporan_id(id_user, created_at, jenis), produk_id');
-
-  if (start) q1 = q1.gte('laporan.created_at', start);
-  if (end)   q1 = q1.lt('laporan.created_at', end);
-
-  const d1 = await q1;
+    .select('laporan_id, subtotal, produk_id')
+    .in('laporan_id', laporanIds);
   if (d1.error) return d1;
 
-  const rows = (id_user ? (d1.data ?? []).filter(r => r.laporan?.id_user === id_user) : (d1.data ?? []));
+  const rows = d1.data ?? [];
   if (!rows.length) return { data: [], error: null };
 
   // 2) map produk
@@ -28,7 +60,7 @@ export async function fetchNeracaExpanded({ id_user, start, end }) {
   const pmap = {};
   for (const p of pr.data ?? []) pmap[p.produk_id] = { nama: p.nama, kategori_id: p.kategori_id };
 
-  // 3) map kategori (ambil sub_kelompok + neraca_identifier sebagai fallback)
+  // 3) map kategori
   const kategoriIds = [...new Set(Object.values(pmap).map(v => v?.kategori_id).filter(v => v != null))];
   let kmap = {};
   if (kategoriIds.length) {
@@ -40,18 +72,19 @@ export async function fetchNeracaExpanded({ id_user, start, end }) {
     for (const k of kr.data ?? []) {
       kmap[k.kategori_id] = {
         nama: k.nama,
-        sub_kelompok: k.sub_kelompok,             // 'aset_lancar' | 'aset_tetap' | 'kewajiban_lancar' | 'kewajiban_jangka_panjang'
-        neraca_identifier: k.neraca_identifier,   // fallback
+        sub_kelompok: k.sub_kelompok,
+        neraca_identifier: k.neraca_identifier,
       };
     }
   }
 
   // 4) flatten final
   const expanded = rows.map(r => {
+    const hdrInfo = headerMap.get(r.laporan_id) || {};
     const pinfo = pmap[r.produk_id] ?? { nama: null, kategori_id: null };
     const kinfo = pinfo.kategori_id != null ? (kmap[pinfo.kategori_id] ?? {}) : {};
     return {
-      jenis: r.laporan?.jenis ?? null,            // 'pemasukan' | 'pengeluaran'
+      jenis: hdrInfo.jenis ?? null,
       subtotal: Number(r.subtotal || 0),
       produk_id: r.produk_id ?? null,
       produk_nama: pinfo.nama ?? null,
@@ -64,3 +97,4 @@ export async function fetchNeracaExpanded({ id_user, start, end }) {
 
   return { data: expanded, error: null };
 }
+
