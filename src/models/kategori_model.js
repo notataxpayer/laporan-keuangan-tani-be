@@ -128,20 +128,35 @@ export async function countLapkeuanganByKategori(kategori_id) {
 }
 
 // V2
-async function inferSubKelompok({ kategori_nama, produk_nama, owner_user_id, owner_klaster_id }) {
-  const text = [kategori_nama, produk_nama].filter(Boolean).join(' ').toLowerCase();
+// async function inferSubKelompok({ kategori_nama, produk_nama, owner_user_id, owner_klaster_id }) {
+//   const text = [kategori_nama, produk_nama].filter(Boolean).join(' ').toLowerCase();
 
-  const { data: rules, error } = await fetchRules({ owner_user_id, owner_klaster_id });
-  if (!error && rules?.length) {
-    // pakai pola simple: '%keyword%' → cek includes(keyword)
-    for (const r of rules) {
-      const kw = String(r.pattern || '').replace(/%/g,'').trim().toLowerCase();
-      if (!kw) continue;
-      if (text.includes(kw)) return r.target_sub_kelompok;
+//   const { data: rules, error } = await fetchRules({ owner_user_id, owner_klaster_id });
+//   if (!error && rules?.length) {
+//     // pakai pola simple: '%keyword%' → cek includes(keyword)
+//     for (const r of rules) {
+//       const kw = String(r.pattern || '').replace(/%/g,'').trim().toLowerCase();
+//       if (!kw) continue;
+//       if (text.includes(kw)) return r.target_sub_kelompok;
+//     }
+//   }
+//   return guessByFallback(text);
+// }
+
+// V3 (strict, dengan full LIKE matching, dan prioritas rules lebih kompleks)
+async function inferSubKelompokStrict({ kategori_nama, produk_nama, owner_user_id, owner_klaster_id }) {
+  const text = [kategori_nama, produk_nama].filter(Boolean).join(' ').toLowerCase();
+  const { data: rules, error } = await fetchRulesStrict({ owner_user_id, owner_klaster_id });
+  if (error) return { sub: null, err: error };
+
+  for (const r of rules) {
+    if (likeMatch(text, r.pattern)) {
+      return { sub: r.target_sub_kelompok || null, err: null };
     }
   }
-  return guessByFallback(text);
+  return { sub: null, err: null }; // tidak ada yang match
 }
+
 
 // nextscoped in ranges utk inferSubKelompok
 async function nextScopedNeracaInRange({ min, max, owner_user_id, owner_klaster_id }) {
@@ -172,55 +187,69 @@ export async function createKategoriAutoSmart({
   owner_user_id,
   owner_klaster_id,
 }) {
-  // TODO: ganti ini ke fungsi rules kamu sendiri
-  const inferred_sub = await inferSubKelompok({
-    nama,
+  const { sub: inferred_sub, err } = await inferSubKelompokStrict({
+    kategori_nama: nama,
     produk_nama,
     owner_user_id,
     owner_klaster_id,
-  }); // hasil: 'aset_lancar' | 'aset_tetap' | 'kewajiban_lancar' | 'kewajiban_jangka_panjang' | null
+  });
+  if (err) return { data: null, error: err };
+
+  // === MODE KETAT: wajib ada rule yang match ===
+  if (!inferred_sub) {
+    return { data: null, error: { message: 'Tidak ada rule kategori yang cocok di kategori_auto_rules' } };
+    // === MODE LEMBUT (opsional):
+    // return supabase.from('kategorial')
+    //   .insert([{
+    //     nama,
+    //     jenis: 'pemasukan',       // atau null, sesuai kebijakanmu
+    //     sub_kelompok: null,
+    //     user_id: owner_user_id ?? null,
+    //     klaster_id: owner_klaster_id ?? null,
+    //     neraca_identifier: null,
+    //   }]).select('kategori_id, nama, jenis, sub_kelompok, klaster_id, user_id, neraca_identifier').single();
+  }
 
   const payload = {
     nama,
-    jenis: inferred_sub && inferred_sub.startsWith('kewajiban') ? 'pengeluaran' : 'pemasukan',
-    sub_kelompok: inferred_sub ?? null,
+    jenis: inferred_sub.startsWith('kewajiban') ? 'pengeluaran' : 'pemasukan',
+    sub_kelompok: inferred_sub,
     user_id: owner_user_id ?? null,
     klaster_id: owner_klaster_id ?? null,
     neraca_identifier: null,
   };
 
-  const range = inferred_sub ? RANGE_BY_SUB[inferred_sub] : null;
+  const RANGE_BY_SUB = {
+    aset_lancar: { min: 0, max: 2599 },
+    aset_tetap: { min: 2600, max: 3599 },
+    kewajiban_lancar: { min: 4000, max: 4499 },
+    kewajiban_jangka_panjang: { min: 4500, max: 4999 },
+  };
+  const range = RANGE_BY_SUB[inferred_sub];
 
-  if (range) {
-    // assign berdasarkan SUB-KEL
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const { next, error } = await nextScopedNeracaByRange({
-        ...range,
-        owner_klaster_id,
-        owner_user_id,
-      });
-      if (error) return { data: null, error };
+  // assign neraca_identifier dalam scope (user/klaster)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { next, error } = await nextScopedNeracaByRange({
+      ...range,
+      owner_klaster_id,
+      owner_user_id,
+    });
+    if (error) return { data: null, error };
 
-      const ins = await supabase
-        .from('kategorial')
-        .insert([{ ...payload, neraca_identifier: next }])
-        .select('kategori_id, nama, jenis, sub_kelompok, klaster_id, user_id, neraca_identifier')
-        .single();
+    const ins = await supabase
+      .from('kategorial')
+      .insert([{ ...payload, neraca_identifier: next }])
+      .select('kategori_id, nama, jenis, sub_kelompok, klaster_id, user_id, neraca_identifier')
+      .single();
 
-      if (!ins.error) return ins;
-      if ((ins.error.message || '').toLowerCase().includes('duplicate')) continue; // race
-      return ins;
-    }
-    return { data: null, error: { message: 'Gagal menetapkan neraca_identifier (race)' } };
+    if (!ins.error) return ins;
+    if ((ins.error.message || '').toLowerCase().includes('duplicate')) continue;
+    return ins;
   }
 
-  // fallback kalau rules tidak menentukan sub_kelompok
-  return supabase
-    .from('kategorial')
-    .insert([payload])
-    .select('kategori_id, nama, jenis, sub_kelompok, klaster_id, user_id, neraca_identifier')
-    .single();
+  return { data: null, error: { message: 'Gagal menetapkan neraca_identifier (race)' } };
 }
+
 
 // cari kategori by name, scope user/klaster
 
@@ -244,28 +273,56 @@ export async function findKategoriByNameScoped({ nama, owner_user_id, owner_klas
 
 
 // ambil rule untuk infer subkelompok
-async function fetchRules({ owner_user_id, owner_klaster_id }) {
-  // prioritas: per user/klaster dulu, lalu global (null scope), urut priority ASC
-  return supabase
+// async function fetchRules({ owner_user_id, owner_klaster_id }) {
+//   return supabase
+//     .from('kategori_auto_rules')
+//     .select('pattern, target_sub_kelompok, priority, user_id, klaster_id')
+//     .or(`user_id.eq.${owner_user_id},klaster_id.eq.${owner_klaster_id},and(is.null.user_id,is.null.klaster_id)`)
+//     .order('priority', { ascending: true });
+// }
+
+// Rules dari DB
+async function fetchRulesStrict({ owner_user_id, owner_klaster_id }) {
+  const ors = [
+    owner_user_id    ? `user_id.eq.${owner_user_id}`       : 'false',
+    owner_klaster_id ? `klaster_id.eq.${owner_klaster_id}` : 'false',
+    'and(user_id.is.null,klaster_id.is.null)'
+  ].join(',');
+
+  const { data, error } = await supabase
     .from('kategori_auto_rules')
     .select('pattern, target_sub_kelompok, priority, user_id, klaster_id')
-    .or(`user_id.eq.${owner_user_id},klaster_id.eq.${owner_klaster_id},and(is.null.user_id,is.null.klaster_id)`)
-    .order('priority', { ascending: true });
+    .or(ors);
+
+  if (error) return { data: [], error };
+
+  const rank = (r) => (
+    r.user_id === owner_user_id ? 0 :
+    r.klaster_id === owner_klaster_id ? 1 : 2
+  );
+
+  const sorted = (data ?? []).slice().sort((a, b) => {
+    const ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    return (a.priority ?? 9999) - (b.priority ?? 9999);
+  });
+
+  return { data: sorted, error: null };
 }
 
-function guessByFallback(text) {
-  const t = text.toLowerCase();
-  const FALLBACK = [
-    { sub: 'aset_lancar', kws: ['panen','stok','persediaan','hasil','piutang','kas','bank','uang','pupuk','bibit','benih','obat'] },
-    { sub: 'aset_tetap',  kws: ['lahan','sawah','tanah','bangunan','kendaraan','mesin','peralatan besar','gudang','kandang','sumur','irigasi'] },
-    { sub: 'kewajiban_lancar', kws: ['utang dagang','hutang dagang','pinjaman','kredit','kredit bank','biaya','gaji','listrik','air','pajak'] },
-    { sub: 'kewajiban_jangka_panjang', kws: ['utang bank','hutang bank','utang investasi','hutang modal','sewa jangka panjang','leasing','cicilan'] },
-  ];
-  for (const g of FALLBACK) {
-    if (g.kws.some(kw => t.includes(kw))) return g.sub;
-  }
-  return 'aset_lancar';
-}
+// function guessByFallback(text) {
+//   const t = text.toLowerCase();
+//   const FALLBACK = [
+//     { sub: 'aset_lancar', kws: ['panen','stok','persediaan','hasil','piutang','kas','bank','uang','pupuk','bibit','benih','obat'] },
+//     { sub: 'aset_tetap',  kws: ['lahan','sawah','tanah','bangunan','kendaraan','mesin','peralatan besar','gudang','kandang','sumur','irigasi'] },
+//     { sub: 'kewajiban_lancar', kws: ['utang dagang','hutang dagang','pinjaman','kredit','kredit bank','biaya','gaji','listrik','air','pajak'] },
+//     { sub: 'kewajiban_jangka_panjang', kws: ['utang bank','hutang bank','utang investasi','hutang modal','sewa jangka panjang','leasing','cicilan'] },
+//   ];
+//   for (const g of FALLBACK) {
+//     if (g.kws.some(kw => t.includes(kw))) return g.sub;
+//   }
+//   return 'aset_lancar';
+// }
 
 // changes
 async function nextScopedNeracaByRange({ min, max, owner_klaster_id, owner_user_id }) {
@@ -287,6 +344,15 @@ async function nextScopedNeracaByRange({ min, max, owner_klaster_id, owner_user_
   if (next > max) return { error: { message: `Range ${min}-${max} penuh untuk scope ini` } };
   return { next };
 }
+
+// Like match utility (untuk rules matching)
+function likeMatch(haystack, likePattern) {
+  const esc = String(likePattern || '')
+    .replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');     // escape regex
+  const reStr = '^' + esc.replace(/%/g, '.*').replace(/_/g, '.') + '$';
+  return new RegExp(reStr, 'i').test(haystack);
+}
+
 
 export async function listKategoriByScope({
   owner_user_id, owner_klaster_id, jenis, search, page = 1, limit = 20,

@@ -102,7 +102,7 @@ export async function create(req, res) {
 
     return res.status(201).json({ message: 'Produk dibuat', data });
   } catch (e) {
-    return res.status(500).json({ message: 'Terjadi kesalahan', detail: e.message });
+    return res.status(422).json({ message: 'Rules tidak cocok', detail: e.message });
   }
 }
 
