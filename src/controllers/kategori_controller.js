@@ -5,9 +5,8 @@ import {
   listKategoriVisible,
   getKategoriById,
   deleteKategoriById,
-  countProdukByKategori,
-  countLapkeuanganByKategori,
-  listKategoriByScope
+  listKategoriByScope,
+  nullifyProdukKategori
 } from '../models/kategori_model.js';
 
 const ALLOWED = ['pengeluaran', 'pemasukan', 'produk', 'pasar'];
@@ -41,13 +40,13 @@ export async function create(req, res) {
   if (errors.length) return res.status(400).json({ message: 'Validasi gagal', errors });
 
   const nama = String(req.body.nama).trim();
-  const jenis = String(req.body.jenis).trim().toLowerCase();
+  // jenis masih divalidasi input, tapi penentuan final jenis/sub_kelompok dilakukan oleh rules DB
   const owner_user_id = req.user.user_id;
   const owner_klaster_id = await getUserKlasterId(owner_user_id); // bisa null
 
   const { data, error } = await createKategoriAutoSmart({
     nama,
-    jenis,
+    produk_nama: nama, // bisa pakai nama produk/kategori sebagai konteks inference
     owner_user_id,
     owner_klaster_id,
   });
@@ -85,31 +84,32 @@ export async function remove(req, res) {
   if (selErr || !exist) return res.status(404).json({ message: 'Kategori tidak ditemukan' });
 
   const viewer_user_id = req.user.user_id;
-  const viewer_klaster_id = await getUserKlasterId(viewer_user_id);
+  const { data: me } = await supabase
+    .from('User')
+    .select('klaster_id')
+    .eq('user_id', viewer_user_id)
+    .single();
 
   const allowed =
-    isAdmin(req.user.role) ||
+    ['admin','superadmin'].includes(String(req.user.role).toLowerCase()) ||
     (exist.user_id && exist.user_id === viewer_user_id) ||
-    (exist.klaster_id && viewer_klaster_id && exist.klaster_id === viewer_klaster_id);
+    (exist.klaster_id && me?.klaster_id && String(exist.klaster_id) === String(me.klaster_id));
 
   if (!allowed) return res.status(403).json({ message: 'Forbidden: bukan pemilik kategori' });
 
-  const { count: prodCount, error: prodErr } = await countProdukByKategori(id);
-  if (prodErr) return res.status(500).json({ message: 'Gagal cek referensi produk', detail: prodErr.message });
-  if ((prodCount ?? 0) > 0) {
-    return res.status(409).json({ message: 'Kategori dipakai oleh produk—tidak bisa dihapus' });
-  }
+  // 1) NULL-kan kategori_id di produk yang masih refer ke kategori ini
+  const { data: affectedRows, error: nullErr } = await nullifyProdukKategori(id);
+  if (nullErr) return res.status(500).json({ message: 'Gagal melepaskan kategori dari produk', detail: nullErr.message });
+  const affected = affectedRows?.length ?? 0;
 
-  const { count: lapCount, error: lapErr } = await countLapkeuanganByKategori(id);
-  if (lapErr) return res.status(500).json({ message: 'Gagal cek referensi laporan', detail: lapErr.message });
-  if ((lapCount ?? 0) > 0) {
-    return res.status(409).json({ message: 'Kategori dipakai di laporan keuangan—tidak bisa dihapus' });
-  }
-
+  // 2) Hapus kategori
   const { error: delErr } = await deleteKategoriById(id);
   if (delErr) return res.status(500).json({ message: 'Gagal hapus kategori', detail: delErr.message });
 
-  return res.json({ message: 'Kategori dihapus' });
+  return res.json({
+    message: 'Kategori dihapus',
+    affected_products_set_null: affected,
+  });
 }
 
 export async function listByScope(req, res) {
@@ -118,16 +118,17 @@ export async function listByScope(req, res) {
   const search = String(req.query.search ?? '').trim();
   const jenis  = req.query.jenis ? String(req.query.jenis).toLowerCase() : undefined;
 
-  const owner_user_id     = req.query.user_id     ? String(req.query.user_id)     : undefined;
-  const owner_klaster_id  = req.query.klaster_id  ? String(req.query.klaster_id)  : undefined;
+  const owner_user_id    = req.query.user_id    ? String(req.query.user_id)    : undefined;
+  const owner_klaster_id = req.query.klaster_id ? String(req.query.klaster_id) : undefined;
 
   if (!owner_user_id && !owner_klaster_id) {
     return res.status(400).json({ message: 'Wajib kirim user_id atau klaster_id' });
   }
 
-  // Authorization: non-admin hanya boleh minta scope miliknya sendiri
-  const admin = ['admin','superadmin'].includes(String(req.user?.role || '').toLowerCase());
-  if (!admin) {
+  const isAdm = ['admin','superadmin'].includes(String(req.user?.role || '').toLowerCase());
+
+  if (!isAdm) {
+    // Non-admin hanya boleh scope dirinya sendiri
     const myUid = req.user.user_id;
     const { data: me } = await supabase.from('User').select('klaster_id').eq('user_id', myUid).single();
 
@@ -136,6 +137,21 @@ export async function listByScope(req, res) {
     }
     if (owner_klaster_id && (!me?.klaster_id || String(me.klaster_id) !== owner_klaster_id)) {
       return res.status(403).json({ message: 'Forbidden: klaster_id bukan klastermu' });
+    }
+  } else {
+    // Admin: jika user_id & klaster_id dua-duanya ada, pastikan klaster tsb memang klasternya user itu
+    if (owner_user_id && owner_klaster_id) {
+      const { data: u, error } = await supabase
+        .from('User')
+        .select('klaster_id')
+        .eq('user_id', owner_user_id)
+        .single();
+      if (error || !u) {
+        return res.status(404).json({ message: 'User tidak ditemukan' });
+      }
+      if (!u.klaster_id || String(u.klaster_id) !== owner_klaster_id) {
+        return res.status(403).json({ message: 'Forbidden: klaster_id bukan milik user_id tersebut' });
+      }
     }
   }
 
