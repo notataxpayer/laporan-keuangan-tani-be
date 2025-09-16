@@ -43,7 +43,7 @@ export async function create(req, res) {
   // jenis masih divalidasi input, tapi penentuan final jenis/sub_kelompok dilakukan oleh rules DB
   const owner_user_id = req.user.user_id;
   const owner_klaster_id = await getUserKlasterId(owner_user_id); // bisa null
-  const share = Boolean(req.user.share_klaster)
+  const share = Boolean(req.body.share_klaster)
 
   const klaster = share ? owner_klaster_id : null
  
