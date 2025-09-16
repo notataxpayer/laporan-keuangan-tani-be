@@ -43,12 +43,15 @@ export async function create(req, res) {
   // jenis masih divalidasi input, tapi penentuan final jenis/sub_kelompok dilakukan oleh rules DB
   const owner_user_id = req.user.user_id;
   const owner_klaster_id = await getUserKlasterId(owner_user_id); // bisa null
+  const share = Boolean(req.user.share_klaster)
 
+  const klaster = share ? owner_klaster_id : null
+ 
   const { data, error } = await createKategoriAutoSmart({
     nama,
     produk_nama: nama, // bisa pakai nama produk/kategori sebagai konteks inference
     owner_user_id,
-    owner_klaster_id,
+    klaster
   });
 
   if (error) {

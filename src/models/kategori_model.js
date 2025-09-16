@@ -222,11 +222,11 @@ export async function createKategoriAutoSmart({
 }
 
 async function fetchRulesStrict({ owner_user_id, owner_klaster_id }) {
-  const ors = [
-    owner_user_id    ? `user_id.eq.${owner_user_id}`       : 'false',
-    owner_klaster_id ? `klaster_id.eq.${owner_klaster_id}` : 'false',
-    'and(user_id.is.null,klaster_id.is.null)'
-  ].join(',');
+  const clauses = ['and(user_id.is.null,klaster_id.is.null)'];
+  if (owner_user_id)    clauses.push(`user_id.eq.${owner_user_id}`);
+  if (owner_klaster_id) clauses.push(`klaster_id.eq.${owner_klaster_id}`);
+
+  const ors = clauses.join(',');
 
   const { data, error } = await supabase
     .from('kategori_auto_rules')
@@ -235,10 +235,9 @@ async function fetchRulesStrict({ owner_user_id, owner_klaster_id }) {
 
   if (error) return { data: [], error };
 
-  const rank = (r) => (
+  const rank = (r) =>
     r.user_id === owner_user_id ? 0 :
-    r.klaster_id === owner_klaster_id ? 1 : 2
-  );
+    r.klaster_id === owner_klaster_id ? 1 : 2;
 
   const sorted = (data ?? []).slice().sort((a, b) => {
     const ra = rank(a), rb = rank(b);
@@ -248,6 +247,7 @@ async function fetchRulesStrict({ owner_user_id, owner_klaster_id }) {
 
   return { data: sorted, error: null };
 }
+
 
 // Like match utility (untuk rules matching)
 function likeMatch(haystack, likePattern) {
