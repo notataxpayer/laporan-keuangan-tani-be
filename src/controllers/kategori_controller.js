@@ -51,7 +51,7 @@ export async function create(req, res) {
     nama,
     produk_nama: nama, // bisa pakai nama produk/kategori sebagai konteks inference
     owner_user_id,
-    klaster
+    owner_klaster_id: klaster,
   });
 
   if (error) {
