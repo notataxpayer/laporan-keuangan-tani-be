@@ -4,6 +4,8 @@ import { randomUUID } from 'crypto';
 import supabase from '../config/supabase.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
 import { signToken, authRequired } from '../middlewares/auth.js';
+// import { bootstrapDefaultsForNewUser } from './bootstrap_defaults.controller.js';
+import { createBatchDefaultsForUser } from '../models/bootstrap_defaults_model.js';
 
 const router = express.Router();
 
@@ -72,6 +74,17 @@ router.post('/register', async (req, res) => {
 
   if (error) {
     return res.status(500).json({ message: 'Gagal membuat user', detail: error.message });
+  }
+   try {
+    // kalau mau defaultnya PRIBADI (klaster_id null):
+    await createBatchDefaultsForUser({
+      owner_user_id: user_id,
+      owner_klaster_id: data.klaster_id ?? null,
+      shareToKlaster: false, // ubah ke true kalau ingin simpan ke klaster bila klaster_id ada
+    });
+  } catch (e) {
+    console.error('Gagal bootstrap defaults:', e?.message || e);
+    // jangan gagalkan registrasi hanya karena bootstrap gagal
   }
 
   const token = signToken({ user_id, email, role, klaster_id });

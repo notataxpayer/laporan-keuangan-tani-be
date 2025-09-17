@@ -9,7 +9,7 @@ import {
   nullifyProdukKategori
 } from '../models/kategori_model.js';
 
-const ALLOWED = ['pengeluaran', 'pemasukan', 'produk', 'pasar'];
+const ALLOWED = ['pengeluaran', 'pemasukan', 'produk', 'modal'];
 
 function isAdmin(role) {
   return role === 'admin' || role === 'superadmin';

@@ -2,6 +2,7 @@
 import express from 'express';
 import { authRequired, roleGuard } from '../middlewares/auth.js';
 import { create, list, detail, update, remove, listMyProducts, listByUser } from '../controllers/product_controller.js';
+import { bootstrapDefaultsForMe, adminBootstrapDefaultsForUser} from '../controllers/boostrap_default_controller.js'
 
 const router = express.Router();
 
@@ -19,6 +20,9 @@ router.get('/:id', authRequired, detail);
 
 // Tambah produk
 router.post('/', authRequired, create);
+
+// Bootstrap call
+router.post('/bootstrap', authRequired, bootstrapDefaultsForMe);
 
 // Update produk
 router.patch('/:id', authRequired, update);

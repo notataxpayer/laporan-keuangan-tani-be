@@ -6,6 +6,7 @@ const RANGE_BY_SUB = {
   aset_tetap:                { min: 2600, max: 3599 },
   kewajiban_lancar:          { min: 4000, max: 4499 },
   kewajiban_jangka_panjang:  { min: 4500, max: 4999 },
+  modal:                     { min: 6000, max: 6500},
 };
 
 async function nextScopedNeraca({ min, max, owner_klaster_id, owner_user_id }) {
@@ -180,10 +181,16 @@ export async function createKategoriAutoSmart({
   if (!inferred_sub) {
     return { data: null, error: { message: 'Tidak ada rule kategori yang cocok di kategori_auto_rules' } };
   }
-
+  const JENIS_BY_SUB = {
+    aset_lancar: 'pemasukan',
+    aset_tetap: 'pemasukan',
+    kewajiban_lancar: 'pengeluaran',
+    kewajiban_jangka_panjang: 'pengeluaran',
+    modal: 'modal',
+  };
   const payload = {
     nama,
-    jenis: inferred_sub.startsWith('kewajiban') ? 'pengeluaran' : 'pemasukan',
+     jenis: JENIS_BY_SUB[inferred_sub] || 'pemasukan',
     sub_kelompok: inferred_sub,
     user_id: owner_user_id ?? null,
     klaster_id: owner_klaster_id ?? null,
@@ -195,6 +202,7 @@ export async function createKategoriAutoSmart({
     aset_tetap: { min: 2600, max: 3599 },
     kewajiban_lancar: { min: 4000, max: 4499 },
     kewajiban_jangka_panjang: { min: 4500, max: 4999 },
+    modal: {min: 6000, max: 6500}
   };
   const range = RANGE_BY_SUB[inferred_sub];
 
