@@ -352,13 +352,10 @@ export async function getArusKasByAkun(req, res) {
   }
 
   const { data: me } = await supabase
-    .from('User')
-    .select('klaster_id')
-    .eq('user_id', req.user.user_id)
-    .single();
+    .from('User').select('klaster_id').eq('user_id', req.user.user_id).single();
 
-  const isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
-  const isOwner = akun.user_id && akun.user_id === req.user.user_id;
+  const isAdmin     = req.user.role === 'admin' || req.user.role === 'superadmin';
+  const isOwner     = akun.user_id && akun.user_id === req.user.user_id;
   const sameCluster = akun.klaster_id && me?.klaster_id && akun.klaster_id === me.klaster_id;
 
   if (!isAdmin && !isOwner && !sameCluster) {
@@ -371,11 +368,9 @@ export async function getArusKasByAkun(req, res) {
   const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
 
   // --- SHARE FILTER ---
-  // all | own | cluster
   const share = String(req.query.share || 'all').toLowerCase();
 
-  // Tentukan klaster filter yang dipakai saat share=cluster
-  // Prioritas: query override (admin) -> akun.klaster_id -> me.klaster_id
+  // klaster efektif untuk share=cluster
   const queryClusterId = req.query.klaster_id ? Number(req.query.klaster_id) : null;
   const effectiveClusterId = (isAdmin && queryClusterId != null)
     ? queryClusterId
@@ -383,55 +378,30 @@ export async function getArusKasByAkun(req, res) {
         ? Number(akun.klaster_id)
         : (me?.klaster_id != null ? Number(me.klaster_id) : null));
 
-  // Tentukan id_user untuk query model:
-  // - default existing: admin bisa kosong (lihat semua user di akun tsb), non-admin dibatasi user-nya sendiri
-  // - untuk share=cluster: kita ingin bisa lihat SEMUA user yg bertransaksi di akun itu dalam klaster terkait
-  //   => biarkan id_user undefined agar model mengembalikan semua, lalu kita filter di bawah
-  let id_user;
-  if (share === 'cluster') {
-    id_user = undefined; // penting: jangan batasi ke user tertentu saat butuh cluster view
-  } else {
-    id_user = isAdmin ? (req.query.id_user ?? undefined) : req.user.user_id;
-  }
+  // id_user ke model:
+  // - cluster view: biarkan undefined supaya bisa lihat semua user di klaster tsb
+  // - lainnya: admin bisa override ?id_user=..., non-admin pakai dirinya
+  const id_user = (share === 'cluster')
+    ? undefined
+    : (isAdmin ? (req.query.id_user ?? undefined) : req.user.user_id);
 
-  // Ambil dua arah sekaligus
+  // Ambil dua arah (FILTER share & klaster dilakukan di DB)
   const [masukRes, keluarRes] = await Promise.all([
-    listAruskas({ id_user, start, end, arah: 'masuk',  akun_id, page, limit }),
-    listAruskas({ id_user, start, end, arah: 'keluar', akun_id, page, limit }),
+    listAruskas({
+      id_user, start, end, arah: 'masuk', akun_id, page, limit,
+      share, klaster_id_filter: effectiveClusterId
+    }),
+    listAruskas({
+      id_user, start, end, arah: 'keluar', akun_id, page, limit,
+      share, klaster_id_filter: effectiveClusterId
+    }),
   ]);
 
-  if (masukRes.error) {
-    return res.status(500).json({ message: 'Gagal ambil arus kas masuk',  detail: masukRes.error.message });
-  }
-  if (keluarRes.error) {
-    return res.status(500).json({ message: 'Gagal ambil arus kas keluar', detail: keluarRes.error.message });
-  }
+  if (masukRes.error)  return res.status(500).json({ message: 'Gagal ambil arus kas masuk',  detail: masukRes.error.message });
+  if (keluarRes.error) return res.status(500).json({ message: 'Gagal ambil arus kas keluar', detail: keluarRes.error.message });
 
-  const rawMasuk  = masukRes.data  ?? [];
-  const rawKeluar = keluarRes.data ?? [];
-
-  // ---- APPLY SHARE FILTER DI SINI ----
-  const isNullishCluster = (v) => v === null || v === undefined || v === 'null' || v === '';
-
-  const filterByShare = (rows) => {
-    if (share === 'own') {
-      // hanya transaksi pribadi (klaster_id null)
-      return rows.filter(r => isNullishCluster(r.klaster_id));
-    }
-    if (share === 'cluster') {
-      // hanya transaksi klaster (non-null) & match klaster efektif jika ada
-      return rows.filter(r => {
-        if (isNullishCluster(r.klaster_id)) return false;
-        if (effectiveClusterId == null) return true; // fallback: non-null saja
-        return Number(r.klaster_id) === Number(effectiveClusterId);
-      });
-    }
-    // 'all'
-    return rows;
-  };
-
-  const masuk  = filterByShare(rawMasuk);
-  const keluar = filterByShare(rawKeluar);
+  const masuk  = masukRes.data  ?? [];
+  const keluar = keluarRes.data ?? [];
 
   const totalMasuk  = masuk.reduce((a, r)  => a + Number(r.debit  || 0), 0);
   const totalKeluar = keluar.reduce((a, r) => a + Number(r.kredit || 0), 0);
@@ -440,19 +410,20 @@ export async function getArusKasByAkun(req, res) {
     meta: {
       akun_id,
       share,
-      cluster_id: effectiveClusterId, // buat debugging di FE
+      cluster_id: effectiveClusterId,
       periode: { start: start ?? null, end: end ?? null },
       page, limit,
-      total_rows_masuk:  masuk.length,
-      total_rows_keluar: keluar.length,
+      total_rows_masuk:  masukRes.count  ?? masuk.length,
+      total_rows_keluar: keluarRes.count ?? keluar.length,
       total_masuk:  totalMasuk,
       total_keluar: totalKeluar,
-      net: totalMasuk - totalKeluar,
+      net: totalMasuk - totalKeluar
     },
     masuk,
-    keluar,
+    keluar
   });
 }
+
 
 
 export async function updateLaporanController(req, res) {
