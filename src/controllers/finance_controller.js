@@ -347,7 +347,9 @@ export async function getArusKasByAkun(req, res) {
 
   // validasi kepemilikan akun kas
   const { data: akun, error: akunErr } = await getAkunKasById(akun_id);
-  if (akunErr || !akun) return res.status(404).json({ message: 'Akun kas tidak ditemukan' });
+  if (akunErr || !akun) {
+    return res.status(404).json({ message: 'Akun kas tidak ditemukan' });
+  }
 
   const { data: me } = await supabase
     .from('User')
@@ -355,10 +357,11 @@ export async function getArusKasByAkun(req, res) {
     .eq('user_id', req.user.user_id)
     .single();
 
-  const admin = req.user.role === 'admin' || req.user.role === 'superadmin';
-  const owner = akun.user_id && akun.user_id === req.user.user_id;
+  const isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
+  const isOwner = akun.user_id && akun.user_id === req.user.user_id;
   const sameCluster = akun.klaster_id && me?.klaster_id && akun.klaster_id === me.klaster_id;
-  if (!admin && !owner && !sameCluster) {
+
+  if (!isAdmin && !isOwner && !sameCluster) {
     return res.status(403).json({ message: 'Forbidden: akun kas bukan milikmu/klastermu' });
   }
 
@@ -367,34 +370,87 @@ export async function getArusKasByAkun(req, res) {
   const start = req.query.start ? new Date(req.query.start).toISOString() : undefined;
   const end   = req.query.end   ? new Date(req.query.end).toISOString()   : undefined;
 
-  // bila admin, boleh lihat transaksi user lain di akun ini via ?id_user=; kalau tidak diisi, ambil semua di akun tsb
-  const id_user = admin ? (req.query.id_user ?? undefined) : req.user.user_id;
+  // --- SHARE FILTER ---
+  // all | own | cluster
+  const share = String(req.query.share || 'all').toLowerCase();
 
-  // ambil dua arah sekaligus
+  // Tentukan klaster filter yang dipakai saat share=cluster
+  // Prioritas: query override (admin) -> akun.klaster_id -> me.klaster_id
+  const queryClusterId = req.query.klaster_id ? Number(req.query.klaster_id) : null;
+  const effectiveClusterId = (isAdmin && queryClusterId != null)
+    ? queryClusterId
+    : (akun.klaster_id != null
+        ? Number(akun.klaster_id)
+        : (me?.klaster_id != null ? Number(me.klaster_id) : null));
+
+  // Tentukan id_user untuk query model:
+  // - default existing: admin bisa kosong (lihat semua user di akun tsb), non-admin dibatasi user-nya sendiri
+  // - untuk share=cluster: kita ingin bisa lihat SEMUA user yg bertransaksi di akun itu dalam klaster terkait
+  //   => biarkan id_user undefined agar model mengembalikan semua, lalu kita filter di bawah
+  let id_user;
+  if (share === 'cluster') {
+    id_user = undefined; // penting: jangan batasi ke user tertentu saat butuh cluster view
+  } else {
+    id_user = isAdmin ? (req.query.id_user ?? undefined) : req.user.user_id;
+  }
+
+  // Ambil dua arah sekaligus
   const [masukRes, keluarRes] = await Promise.all([
     listAruskas({ id_user, start, end, arah: 'masuk',  akun_id, page, limit }),
     listAruskas({ id_user, start, end, arah: 'keluar', akun_id, page, limit }),
   ]);
 
-  if (masukRes.error)  return res.status(500).json({ message: 'Gagal ambil arus kas masuk',  detail: masukRes.error.message });
-  if (keluarRes.error) return res.status(500).json({ message: 'Gagal ambil arus kas keluar', detail: keluarRes.error.message });
+  if (masukRes.error) {
+    return res.status(500).json({ message: 'Gagal ambil arus kas masuk',  detail: masukRes.error.message });
+  }
+  if (keluarRes.error) {
+    return res.status(500).json({ message: 'Gagal ambil arus kas keluar', detail: keluarRes.error.message });
+  }
 
-  const totalMasuk  = (masukRes.data  ?? []).reduce((a, r) => a + Number(r.debit  || 0), 0);
-  const totalKeluar = (keluarRes.data ?? []).reduce((a, r) => a + Number(r.kredit || 0), 0);
+  const rawMasuk  = masukRes.data  ?? [];
+  const rawKeluar = keluarRes.data ?? [];
+
+  // ---- APPLY SHARE FILTER DI SINI ----
+  const isNullishCluster = (v) => v === null || v === undefined || v === 'null' || v === '';
+
+  const filterByShare = (rows) => {
+    if (share === 'own') {
+      // hanya transaksi pribadi (klaster_id null)
+      return rows.filter(r => isNullishCluster(r.klaster_id));
+    }
+    if (share === 'cluster') {
+      // hanya transaksi klaster (non-null) & match klaster efektif jika ada
+      return rows.filter(r => {
+        if (isNullishCluster(r.klaster_id)) return false;
+        if (effectiveClusterId == null) return true; // fallback: non-null saja
+        return Number(r.klaster_id) === Number(effectiveClusterId);
+      });
+    }
+    // 'all'
+    return rows;
+  };
+
+  const masuk  = filterByShare(rawMasuk);
+  const keluar = filterByShare(rawKeluar);
+
+  const totalMasuk  = masuk.reduce((a, r)  => a + Number(r.debit  || 0), 0);
+  const totalKeluar = keluar.reduce((a, r) => a + Number(r.kredit || 0), 0);
 
   return res.json({
     meta: {
       akun_id,
+      share,
+      cluster_id: effectiveClusterId, // buat debugging di FE
       periode: { start: start ?? null, end: end ?? null },
       page, limit,
-      total_rows_masuk:  masukRes.count  ?? (masukRes.data?.length  ?? 0),
-      total_rows_keluar: keluarRes.count ?? (keluarRes.data?.length ?? 0),
+      total_rows_masuk:  masuk.length,
+      total_rows_keluar: keluar.length,
       total_masuk:  totalMasuk,
       total_keluar: totalKeluar,
-      net: totalMasuk - totalKeluar
+      net: totalMasuk - totalKeluar,
     },
-    masuk:  masukRes.data  ?? [],
-    keluar: keluarRes.data ?? []
+    masuk,
+    keluar,
   });
 }
 
